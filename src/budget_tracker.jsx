@@ -72,229 +72,494 @@ function saveState(s) {
 // Excel export
 // ─────────────────────────────────────────────────────────────────────────────
 function exportExcel({ entries, bankBalance, carryForward, incomes }) {
-  const wb = XLSX.utils.book_new();
+  // ── Palette ──────────────────────────────────────────────────────────────
+  const P = {
+    indigo:"4F46E5", indigoD:"3730A3", indigoL:"EEF2FF", indigoXL:"F5F3FF",
+    violet:"6366F1", green:"047857",   greenL:"ECFDF5",
+    red:"B91C1C",    redL:"FEF2F2",    amber:"B45309",   amberL:"FFFBEB",
+    slate:"475569",  slateL:"F1F5F9",
+    gray:"4A5568",   grayXL:"FAFAFA",  border:"E2E8F0",  borderD:"CBD5E0",
+    text:"1A202C",   muted:"718096",   white:"FFFFFF",
+  };
+
+  // ── Low-level helpers ─────────────────────────────────────────────────────
+  const bThin   = (c = P.border)  => ({ style:"thin",   color:{ rgb:c } });
+  const bMed    = (c = P.indigoD) => ({ style:"medium", color:{ rgb:c } });
+  const allBord = (c) => ({ top:bThin(c), bottom:bThin(c), left:bThin(c), right:bThin(c) });
+  const allMed  = (c) => ({ top:bMed(c),  bottom:bMed(c),  left:bMed(c),  right:bMed(c)  });
+  const btBord  = (c) => ({ bottom:bThin(c), right:bThin(c) });
+
+  const mkFont = (bold, sz, rgb, italic) =>
+    ({ bold:!!bold, sz:sz||10, color:{ rgb:rgb||P.text }, italic:!!italic, name:"Calibri" });
+  const mkFill = (rgb) => ({ fgColor:{ rgb }, patternType:"solid" });
+  const mkAlign = (h, v="center", wrap=false) => ({ horizontal:h||"left", vertical:v, wrapText:wrap });
+
+  // Build a full cell style object
+  const mk = ({ bold, sz, fg, color, h, v, wrap, border }) => {
+    const s = { font: mkFont(bold, sz, color), alignment: mkAlign(h, v||"center", wrap) };
+    if (fg) s.fill = mkFill(fg);
+    if (border) s.border = border;
+    return s;
+  };
+
+  // Pre-built common styles
+  const ST = {
+    bigTitle:   mk({ bold:true,  sz:16, color:P.white,  fg:P.indigo,  h:"center", border:allMed(P.indigoD) }),
+    titleSub:   mk({ bold:false, sz:10, color:P.indigo,  fg:P.indigoL, h:"center" }),
+    secIndigo:  mk({ bold:true,  sz:10, color:P.white,  fg:P.indigo,  h:"left",   border:{bottom:bMed(P.indigoD), top:bMed(P.indigoD)} }),
+    secGreen:   mk({ bold:true,  sz:10, color:P.white,  fg:P.green,   h:"left",   border:{bottom:bMed(P.green),   top:bMed(P.green)}   }),
+    secSlate:   mk({ bold:true,  sz:10, color:P.white,  fg:P.slate,   h:"left",   border:{bottom:bMed(P.slate),   top:bMed(P.slate)}   }),
+    secAmber:   mk({ bold:true,  sz:10, color:P.white,  fg:P.amber,   h:"left",   border:{bottom:bMed(P.amber),   top:bMed(P.amber)}   }),
+    tblHdr:     (bg=P.indigoD) => mk({ bold:true, sz:10, color:P.white, fg:bg, h:"center", wrap:true, border:{top:bMed(bg),bottom:bMed(bg),left:bThin(bg),right:bThin(bg)} }),
+    rowLbl:     (alt) => mk({ bold:true,  sz:10, color:P.gray,  fg:alt?P.grayXL:P.white, h:"left",  border:btBord(P.border) }),
+    rowVal:     (alt, clr) => mk({ bold:true,  sz:11, color:clr||P.text, fg:alt?P.grayXL:P.white, h:"right", border:btBord(P.border) }),
+    rowTxt:     (alt) => mk({ bold:false, sz:10, color:P.text,  fg:alt?P.indigoXL:P.white, h:"left",  border:btBord(P.border) }),
+    rowNum:     (alt, clr) => mk({ bold:false, sz:10, color:clr||P.text, fg:alt?P.indigoXL:P.white, h:"right", border:btBord(P.border) }),
+    totalLbl:   mk({ bold:true, sz:11, color:P.white, fg:P.indigo,  h:"left",  border:allMed(P.indigoD) }),
+    totalVal:   mk({ bold:true, sz:11, color:P.white, fg:P.indigo,  h:"right", border:allMed(P.indigoD) }),
+    blank:      mk({ fg:P.indigoL, h:"left" }),
+    blankW:     mk({ fg:P.white,   h:"left" }),
+  };
+
+  // ── Cell writer ───────────────────────────────────────────────────────────
+  function sc(ws, r, c, value, style, fmt) {
+    const addr = XLSX.utils.encode_cell({ r, c });
+    const t = (value == null) ? "z" : typeof value === "number" ? "n" : typeof value === "boolean" ? "b" : "s";
+    ws[addr] = { t, v: value ?? "" };
+    if (style) ws[addr].s = style;
+    if (fmt)   ws[addr].z = fmt;
+  }
+
+  // Merge helper
+  function mg(ws, r1, c1, r2, c2) {
+    if (!ws["!merges"]) ws["!merges"] = [];
+    ws["!merges"].push({ s:{ r:r1, c:c1 }, e:{ r:r2, c:c2 } });
+  }
+
+  // Fill merged blank cells (so borders render)
+  function fillMerge(ws, r, c1, c2, style) {
+    for (let c = c1; c <= c2; c++) sc(ws, r, c, "", style);
+  }
+
+  // ── Domain helpers ────────────────────────────────────────────────────────
   const totalInc = incomes.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0);
 
-  // ── helpers ────────────────────────────────────────────────────────────────
   const eTotal = (e) => {
     let t = ALL_SCALAR.reduce((s, c) => s + parseFloat(e[c.key] || 0), 0);
-    (e.subscriptions || []).forEach(s => { t += parseFloat(s.amount || 0); });
-    (e.others || []).forEach(o => { t += parseFloat(o.amount || 0); });
+    (e.subscriptions||[]).forEach(s => { t += parseFloat(s.amount||0); });
+    (e.others||[]).forEach(o => { t += parseFloat(o.amount||0); });
     return t;
   };
   const catVal = (e, key) => {
-    if (key === "subscriptions") return (e.subscriptions || []).reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
-    if (key === "other")         return (e.others || []).reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
-    return parseFloat(e[key] || 0);
+    if (key === "subscriptions") return (e.subscriptions||[]).reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+    if (key === "other")         return (e.others||[]).reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+    return parseFloat(e[key]||0);
   };
 
   const totalExpenses = entries.reduce((s, e) => s + (e.total || eTotal(e)), 0);
-
-  // cell style helpers
-  const hdr  = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "4F46E5" } }, alignment: { horizontal: "center" } };
-  const subHdr = { font: { bold: true }, fill: { fgColor: { rgb: "EEF2FF" } } };
-  const cur  = { numFmt: '₹#,##0' };
-  const pct  = { numFmt: '0.0%' };
-
-  function applyStyles(ws, range, style) {
-    for (let R = range.s.r; R <= range.e.r; ++R) {
-      for (let C = range.s.c; C <= range.e.c; ++C) {
-        const addr = XLSX.utils.encode_cell({ r: R, c: C });
-        if (!ws[addr]) ws[addr] = { t: 'z', v: '' };
-        ws[addr].s = style;
-      }
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════
-  // Sheet 1 – Summary
-  // ═══════════════════════════════════════════════════════════
-  const summaryRows = [
-    ["BUDGET TRACKER — SUMMARY REPORT", "", ""],
-    ["Generated", new Date().toLocaleDateString("en-IN", { dateStyle: "long" }), ""],
-    ["", "", ""],
-    ["ACCOUNT", "AMOUNT", ""],
-    ["Bank Balance", parseFloat(bankBalance) || 0, ""],
-    ["Carry-Forward Balance", parseFloat(carryForward) || 0, ""],
-    ["Monthly Income", totalInc, ""],
-    ["", "", ""],
-    ["EXPENSES", "AMOUNT", "% OF INCOME"],
-    ["Total Expenses", totalExpenses, totalInc ? totalExpenses / totalInc : 0],
-    ["This Month", 0, 0],
-    ["", "", ""],
-    ["SAVINGS", "AMOUNT", "RATE"],
-    ["Net Savings (Income − Expenses)", Math.max(0, totalInc - totalExpenses), totalInc ? Math.max(0, (totalInc - totalExpenses) / totalInc) : 0],
-    ["Net Balance (Bank + Carry − Expenses)", (parseFloat(bankBalance) || 0) + (parseFloat(carryForward) || 0) - totalExpenses, ""],
-    ["", "", ""],
-    ["STATS", "VALUE", ""],
-    ["Total Entries", entries.length, ""],
-    ["Months Tracked", new Set(entries.map(e => getMon(e.date))).size, ""],
-    ["Avg Monthly Spend", totalExpenses / Math.max(1, new Set(entries.map(e => getMon(e.date))).size), ""],
-  ];
-
-  const curMon = getMon(today());
+  const curMon        = getMon(today());
   const curMonEntries = entries.filter(e => getMon(e.date) === curMon);
   const curMonTotal   = curMonEntries.reduce((s, e) => s + (e.total || eTotal(e)), 0);
-  summaryRows[10][1]  = curMonTotal;
-  summaryRows[10][2]  = totalInc ? curMonTotal / totalInc : 0;
+  const netBalance    = (parseFloat(bankBalance)||0) + (parseFloat(carryForward)||0) - totalExpenses;
+  const savingsThisM  = Math.max(0, totalInc - curMonTotal);
+  const savingsRate   = totalInc > 0 ? savingsThisM / totalInc : 0;
+  const numMonths     = Math.max(1, new Set(entries.map(e => getMon(e.date))).size);
+  const avgMonthly    = totalExpenses / numMonths;
 
-  const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
-  wsSummary['!cols'] = [{ wch: 38 }, { wch: 18 }, { wch: 14 }];
+  const RUPE = "[₹]#,##0";
+  const RUPEF = "[₹]#,##0.00";
 
-  // Format currency cells
-  ["B5","B6","B7","B10","B11","B14","B15","B19"].forEach(addr => {
-    if (wsSummary[addr]) wsSummary[addr].z = '₹#,##0';
-  });
-  ["C10","C11","C14"].forEach(addr => {
-    if (wsSummary[addr]) wsSummary[addr].z = '0.0%';
-  });
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET 1 — SUMMARY
+  // ═══════════════════════════════════════════════════════════════════════════
+  function buildSummary() {
+    const ws = {};
+    ws["!cols"] = [{ wch:36 }, { wch:6 }, { wch:20 }, { wch:14 }];
+    let r = 0;
 
-  XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
+    // Title banner
+    fillMerge(ws, r, 0, 3, ST.bigTitle);
+    sc(ws, r, 0, "💼  BUDGET TRACKER — FINANCIAL REPORT", ST.bigTitle);
+    mg(ws, r, 0, r, 3); r++;
 
-  // ═══════════════════════════════════════════════════════════
-  // Sheet 2 – All Entries
-  // ═══════════════════════════════════════════════════════════
-  const entryHeaders = [
-    "Date", "Day", "Note", "Total",
-    ...ALL_SCALAR.map(c => c.label),
-    "Subscriptions", "Other",
-  ];
-  const entryRows = entries
-    .slice()
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .map(e => [
-      e.date,
-      DAYS[new Date(e.date).getDay()],
-      e.note || "",
-      e.total || eTotal(e),
-      ...ALL_SCALAR.map(c => parseFloat(e[c.key] || 0)),
-      (e.subscriptions || []).reduce((s, x) => s + (parseFloat(x.amount) || 0), 0),
-      (e.others || []).reduce((s, x) => s + (parseFloat(x.amount) || 0), 0),
-    ]);
+    // Subtitle
+    fillMerge(ws, r, 0, 3, ST.titleSub);
+    sc(ws, r, 0, `Report generated: ${new Date().toLocaleDateString("en-IN", { dateStyle:"full" })}`, ST.titleSub);
+    mg(ws, r, 0, r, 3); r++;
 
-  const wsEntries = XLSX.utils.aoa_to_sheet([entryHeaders, ...entryRows]);
-  wsEntries['!cols'] = [
-    { wch: 12 }, { wch: 6 }, { wch: 24 }, { wch: 12 },
-    ...ALL_SCALAR.map(() => ({ wch: 14 })),
-    { wch: 14 }, { wch: 12 },
-  ];
-  // Bold header row
-  entryHeaders.forEach((_, ci) => {
-    const addr = XLSX.utils.encode_cell({ r: 0, c: ci });
-    if (wsEntries[addr]) wsEntries[addr].s = subHdr;
-  });
-  // Currency format for numeric columns (col 3 onward)
-  for (let ri = 1; ri <= entryRows.length; ri++) {
-    for (let ci = 3; ci < entryHeaders.length; ci++) {
-      const addr = XLSX.utils.encode_cell({ r: ri, c: ci });
-      if (wsEntries[addr] && wsEntries[addr].t === 'n') wsEntries[addr].z = '₹#,##0';
-    }
+    // Spacer
+    fillMerge(ws, r, 0, 3, ST.blank); mg(ws, r, 0, r, 3); r++;
+
+    // ── SECTION: ACCOUNT OVERVIEW ──
+    const secRow = (label, val, color, alt, fmt, label2="", val2="", fmt2="") => {
+      const a = !!alt;
+      sc(ws, r, 0, `  ${label}`, ST.rowLbl(a));
+      sc(ws, r, 1, "", ST.rowLbl(a));
+      sc(ws, r, 2, val, ST.rowVal(a, color), fmt);
+      sc(ws, r, 3, typeof val2 === "number" ? val2 : "", ST.rowVal(a, color), fmt2 || undefined);
+      if (typeof val2 === "string" && val2) sc(ws, r, 3, val2, ST.rowVal(a, color));
+      mg(ws, r, 0, r, 1); r++;
+    };
+
+    fillMerge(ws, r, 0, 3, ST.secIndigo);
+    sc(ws, r, 0, "  ACCOUNT OVERVIEW", ST.secIndigo);
+    sc(ws, r, 2, "BALANCE", { ...ST.secIndigo, alignment:mkAlign("center") });
+    sc(ws, r, 3, "", ST.secIndigo);
+    mg(ws, r, 0, r, 1); mg(ws, r, 2, r, 3); r++;
+
+    secRow("Bank Balance",         parseFloat(bankBalance)||0,  P.indigo, false, RUPE);
+    secRow("Carry-Forward Balance", parseFloat(carryForward)||0, P.violet, true,  RUPE);
+    secRow("Monthly Income",       totalInc,                    P.green,  false, RUPE);
+
+    fillMerge(ws, r, 0, 3, ST.blankW); mg(ws, r, 0, r, 3); r++;
+
+    // ── SECTION: THIS MONTH ──
+    fillMerge(ws, r, 0, 3, ST.secGreen);
+    sc(ws, r, 0, "  THIS MONTH", ST.secGreen);
+    sc(ws, r, 2, "AMOUNT", { ...ST.secGreen, alignment:mkAlign("center") });
+    sc(ws, r, 3, "% OF INCOME", { ...ST.secGreen, alignment:mkAlign("center") });
+    mg(ws, r, 0, r, 1); r++;
+
+    const monthDataRows = [
+      ["Total Spent This Month",  curMonTotal,  curMonTotal > totalInc*0.8 ? P.red : P.text, RUPE, totalInc ? curMonTotal/totalInc : 0, "0%"],
+      ["Remaining Budget",        Math.max(0, totalInc - curMonTotal), P.green, RUPE, null, ""],
+      ["Savings This Month",      savingsThisM, P.green, RUPE, totalInc ? savingsThisM/totalInc : 0, "0%"],
+      ["Entries This Month",      curMonEntries.length, P.text, null, null, ""],
+    ];
+    monthDataRows.forEach(([lbl, val, clr, fmt, pctVal, pctFmt], i) => {
+      const alt = i % 2 === 1;
+      sc(ws, r, 0, `  ${lbl}`, ST.rowLbl(alt));
+      sc(ws, r, 1, "", ST.rowLbl(alt));
+      sc(ws, r, 2, val, ST.rowVal(alt, clr), fmt || undefined);
+      sc(ws, r, 3, pctVal != null ? pctVal : "", ST.rowVal(alt, clr), pctFmt || undefined);
+      mg(ws, r, 0, r, 1); r++;
+    });
+
+    // Savings rate highlight bar
+    const srBg = savingsRate >= 0.2 ? P.green : savingsRate >= 0.1 ? P.amber : P.red;
+    const srSt = mk({ bold:true, sz:12, color:P.white, fg:srBg, h:"left",  border:allMed(srBg) });
+    const srVSt= mk({ bold:true, sz:14, color:P.white, fg:srBg, h:"center",border:allMed(srBg) });
+    sc(ws, r, 0, "  Savings Rate", srSt);
+    sc(ws, r, 1, "", srSt);
+    sc(ws, r, 2, "", srSt);
+    sc(ws, r, 3, savingsRate, srVSt, "0.0%");
+    mg(ws, r, 0, r, 2); r++;
+
+    fillMerge(ws, r, 0, 3, ST.blankW); mg(ws, r, 0, r, 3); r++;
+
+    // ── SECTION: OVERALL SUMMARY ──
+    fillMerge(ws, r, 0, 3, ST.secSlate);
+    sc(ws, r, 0, "  OVERALL SUMMARY", ST.secSlate);
+    sc(ws, r, 2, "AMOUNT", { ...ST.secSlate, alignment:mkAlign("center") });
+    sc(ws, r, 3, "", ST.secSlate);
+    mg(ws, r, 0, r, 1); mg(ws, r, 2, r, 3); r++;
+
+    const overallRows = [
+      ["Total Expenses (All Time)",        totalExpenses,  P.red,   RUPE],
+      ["Net Balance (Bank + Carry − Exp)", netBalance,     netBalance >= 0 ? P.green : P.red, RUPE],
+      ["Average Monthly Spend",            avgMonthly,     P.amber, RUPE],
+      ["Total Months Tracked",             numMonths,      P.text,  null],
+      ["Total Entries",                    entries.length, P.text,  null],
+    ];
+    overallRows.forEach(([lbl, val, clr, fmt], i) => {
+      const alt = i % 2 === 1;
+      sc(ws, r, 0, `  ${lbl}`, ST.rowLbl(alt));
+      sc(ws, r, 1, "", ST.rowLbl(alt));
+      sc(ws, r, 2, val, ST.rowVal(alt, clr), fmt || undefined);
+      sc(ws, r, 3, "", ST.rowVal(alt));
+      mg(ws, r, 0, r, 1); mg(ws, r, 2, r, 3); r++;
+    });
+
+    ws["!ref"] = XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:r-1,c:3} });
+    ws["!rows"] = [
+      { hpt:38 }, { hpt:20 }, { hpt:10 },        // title, sub, spacer
+      { hpt:26 }, { hpt:22 }, { hpt:22 }, { hpt:22 },  // account section
+      { hpt:10 },
+      { hpt:26 }, { hpt:22 }, { hpt:22 }, { hpt:22 }, { hpt:22 }, { hpt:28 }, // month section
+      { hpt:10 },
+      { hpt:26 }, { hpt:22 }, { hpt:22 }, { hpt:22 }, { hpt:22 }, { hpt:22 }, // overall
+    ];
+    return ws;
   }
 
-  XLSX.utils.book_append_sheet(wb, wsEntries, "All Entries");
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET 2 — ALL ENTRIES
+  // ═══════════════════════════════════════════════════════════════════════════
+  function buildEntries() {
+    const ws = {};
+    const hdrCols = ["Date","Day","Note","Total",...ALL_SCALAR.map(c=>c.label),"Subscriptions","Other"];
+    ws["!cols"] = [{ wch:12 },{ wch:8 },{ wch:28 },{ wch:14 },...ALL_SCALAR.map(()=>({ wch:13 })),{ wch:13 },{ wch:11 }];
 
-  // ═══════════════════════════════════════════════════════════
-  // Sheet 3 – Monthly Breakdown
-  // ═══════════════════════════════════════════════════════════
-  const monMap = {};
-  entries.forEach(e => {
-    const m = getMon(e.date);
-    if (!monMap[m]) monMap[m] = { total: 0 };
+    // Title
+    fillMerge(ws, 0, 0, hdrCols.length-1, ST.bigTitle);
+    sc(ws, 0, 0, "📋  ALL EXPENSE ENTRIES", ST.bigTitle);
+    mg(ws, 0, 0, 0, hdrCols.length-1);
+
+    // Header row
+    const catColors = [P.indigo, P.indigo, P.indigo, P.indigo,
+      ...FIXED_CATEGORIES.map(()=>P.indigoD),
+      ...VARIABLE_CATEGORIES.map(()=>P.green),
+      ...WELLBEING_CATEGORIES.map(()=>P.slate),
+      P.violet, P.gray];
+    hdrCols.forEach((h, ci) => sc(ws, 1, ci, h, ST.tblHdr(catColors[ci] || P.indigoD)));
+
+    const sorted = [...entries].sort((a, b) => b.date.localeCompare(a.date));
+    sorted.forEach((e, ri) => {
+      const alt = ri % 2 === 0;
+      const row = ri + 2;
+      const total = e.total || eTotal(e);
+      const subs  = (e.subscriptions||[]).reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+      const other = (e.others||[]).reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+      const isLarge = total > avgMonthly * 0.5;
+
+      const txtSt = ST.rowTxt(alt);
+      const numSt = ST.rowNum(alt);
+      const totalSt = ST.rowNum(alt, isLarge ? P.red : P.text);
+
+      sc(ws, row, 0, e.date, txtSt);
+      sc(ws, row, 1, DAYS[new Date(e.date).getDay()], { ...txtSt, alignment:mkAlign("center") });
+      sc(ws, row, 2, e.note || "—", txtSt);
+      sc(ws, row, 3, total, { ...totalSt, font:mkFont(true, 10, isLarge ? P.red : P.text) }, RUPE);
+
+      let ci = 4;
+      ALL_SCALAR.forEach(c => {
+        const v = parseFloat(e[c.key]||0);
+        sc(ws, row, ci++, v||0, v > 0 ? numSt : { ...numSt, font:mkFont(false,10,P.border) }, RUPE);
+      });
+      sc(ws, row, ci++, subs,  subs  > 0 ? numSt : { ...numSt, font:mkFont(false,10,P.border) }, RUPE);
+      sc(ws, row, ci,   other, other > 0 ? numSt : { ...numSt, font:mkFont(false,10,P.border) }, RUPE);
+    });
+
+    // Total row
+    const tRow = sorted.length + 2;
+    sc(ws, tRow, 0, "TOTAL", ST.totalLbl);
+    sc(ws, tRow, 1, "", ST.totalLbl);
+    sc(ws, tRow, 2, "", ST.totalLbl);
+    sc(ws, tRow, 3, totalExpenses, ST.totalVal, RUPE);
+    let ci = 4;
     CHART_CATS.forEach(c => {
-      monMap[m][c.key] = (monMap[m][c.key] || 0) + catVal(e, c.key);
+      const catTot = entries.reduce((s,e)=>s+catVal(e,c.key),0);
+      sc(ws, tRow, ci++, catTot, ST.totalVal, RUPE);
     });
-    monMap[m].total += e.total || eTotal(e);
-  });
 
-  const monHeaders = ["Month", "Total", "vs Prev Month", "% of Income", ...CHART_CATS.map(c => c.label)];
-  const monKeys    = Object.keys(monMap).sort();
-  const monRows    = monKeys.map((m, idx) => {
-    const prev   = idx > 0 ? monMap[monKeys[idx - 1]].total : null;
-    const delta  = prev !== null ? monMap[m].total - prev : "";
-    return [
-      new Date(m + "-01").toLocaleDateString("en-IN", { month: "long", year: "numeric" }),
-      monMap[m].total,
-      delta,
-      totalInc ? monMap[m].total / totalInc : 0,
-      ...CHART_CATS.map(c => monMap[m][c.key] || 0),
-    ];
-  });
-
-  const wsMonthly = XLSX.utils.aoa_to_sheet([monHeaders, ...monRows]);
-  wsMonthly['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, ...CHART_CATS.map(() => ({ wch: 14 }))];
-  monHeaders.forEach((_, ci) => {
-    const addr = XLSX.utils.encode_cell({ r: 0, c: ci });
-    if (wsMonthly[addr]) wsMonthly[addr].s = subHdr;
-  });
-  for (let ri = 1; ri <= monRows.length; ri++) {
-    for (let ci = 1; ci < monHeaders.length; ci++) {
-      const addr = XLSX.utils.encode_cell({ r: ri, c: ci });
-      if (!wsMonthly[addr]) continue;
-      if (ci === 3) wsMonthly[addr].z = '0.0%';
-      else if (wsMonthly[addr].t === 'n') wsMonthly[addr].z = '₹#,##0';
-    }
+    ws["!views"] = [{ state:"frozen", xSplit:0, ySplit:2 }];
+    ws["!autofilter"] = { ref:`A2:${XLSX.utils.encode_col(hdrCols.length-1)}2` };
+    ws["!rows"] = [{ hpt:32 }, { hpt:26 }, ...sorted.map(()=>({ hpt:18 })), { hpt:24 }];
+    ws["!ref"] = XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:tRow,c:hdrCols.length-1} });
+    return ws;
   }
 
-  XLSX.utils.book_append_sheet(wb, wsMonthly, "Monthly Breakdown");
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET 3 — MONTHLY BREAKDOWN
+  // ═══════════════════════════════════════════════════════════════════════════
+  function buildMonthly() {
+    const ws = {};
+    const hdrCols = ["Month","Total Spent","vs Prev Month","% of Income",...CHART_CATS.map(c=>c.label)];
+    ws["!cols"] = [{ wch:20 },{ wch:14 },{ wch:16 },{ wch:13 },...CHART_CATS.map(()=>({ wch:13 }))];
 
-  // ═══════════════════════════════════════════════════════════
-  // Sheet 4 – Category Analysis
-  // ═══════════════════════════════════════════════════════════
-  const catRows = CHART_CATS.map(c => {
-    const val = entries.reduce((s, e) => s + catVal(e, c.key), 0);
-    return [
-      c.icon + " " + c.label,
-      val,
-      totalExpenses ? val / totalExpenses : 0,
-      totalInc      ? val / totalInc      : 0,
-    ];
-  }).filter(r => r[1] > 0).sort((a, b) => b[1] - a[1]);
-
-  const catHeaders = ["Category", "Total Spent", "% of Expenses", "% of Income"];
-  const wsCat = XLSX.utils.aoa_to_sheet([catHeaders, ...catRows]);
-  wsCat['!cols'] = [{ wch: 24 }, { wch: 14 }, { wch: 16 }, { wch: 14 }];
-  catHeaders.forEach((_, ci) => {
-    const addr = XLSX.utils.encode_cell({ r: 0, c: ci });
-    if (wsCat[addr]) wsCat[addr].s = subHdr;
-  });
-  for (let ri = 1; ri <= catRows.length; ri++) {
-    const b = XLSX.utils.encode_cell({ r: ri, c: 1 });
-    const c = XLSX.utils.encode_cell({ r: ri, c: 2 });
-    const d = XLSX.utils.encode_cell({ r: ri, c: 3 });
-    if (wsCat[b]) wsCat[b].z = '₹#,##0';
-    if (wsCat[c]) wsCat[c].z = '0.0%';
-    if (wsCat[d]) wsCat[d].z = '0.0%';
-  }
-
-  XLSX.utils.book_append_sheet(wb, wsCat, "Category Analysis");
-
-  // ═══════════════════════════════════════════════════════════
-  // Sheet 5 – Day-of-Week Analysis
-  // ═══════════════════════════════════════════════════════════
-  const dowMap = { 0: { day: "Sunday", total: 0, count: 0 }, 1: { day: "Monday", total: 0, count: 0 }, 2: { day: "Tuesday", total: 0, count: 0 }, 3: { day: "Wednesday", total: 0, count: 0 }, 4: { day: "Thursday", total: 0, count: 0 }, 5: { day: "Friday", total: 0, count: 0 }, 6: { day: "Saturday", total: 0, count: 0 } };
-  entries.forEach(e => {
-    const dow = new Date(e.date).getDay();
-    dowMap[dow].total += e.total || eTotal(e);
-    dowMap[dow].count += 1;
-  });
-  const dowHeaders = ["Day", "Total Spent", "No. of Entries", "Avg per Entry"];
-  const dowRows    = Object.values(dowMap).map(d => [d.day, d.total, d.count, d.count ? d.total / d.count : 0]);
-  const wsDow = XLSX.utils.aoa_to_sheet([dowHeaders, ...dowRows]);
-  wsDow['!cols'] = [{ wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
-  dowHeaders.forEach((_, ci) => {
-    const addr = XLSX.utils.encode_cell({ r: 0, c: ci });
-    if (wsDow[addr]) wsDow[addr].s = subHdr;
-  });
-  for (let ri = 1; ri <= 7; ri++) {
-    [1, 3].forEach(ci => {
-      const addr = XLSX.utils.encode_cell({ r: ri, c: ci });
-      if (wsDow[addr] && wsDow[addr].t === 'n') wsDow[addr].z = '₹#,##0';
+    // Build month map
+    const monMap = {};
+    entries.forEach(e => {
+      const m = getMon(e.date);
+      if (!monMap[m]) { monMap[m] = { total:0 }; CHART_CATS.forEach(c=>{ monMap[m][c.key]=0; }); }
+      CHART_CATS.forEach(c=>{ monMap[m][c.key] += catVal(e,c.key); });
+      monMap[m].total += e.total || eTotal(e);
     });
-  }
-  XLSX.utils.book_append_sheet(wb, wsDow, "Day Analysis");
+    const monKeys = Object.keys(monMap).sort();
 
-  // ── Write file ─────────────────────────────────────────────
-  XLSX.writeFile(wb, `budget-report-${today()}.xlsx`);
+    // Title
+    fillMerge(ws, 0, 0, hdrCols.length-1, ST.bigTitle);
+    sc(ws, 0, 0, "📅  MONTHLY BREAKDOWN", ST.bigTitle);
+    mg(ws, 0, 0, 0, hdrCols.length-1);
+
+    // Header
+    const hdrBgs = [P.indigoD, P.indigoD, P.indigoD, P.green,
+      ...FIXED_CATEGORIES.map(()=>P.indigoD),
+      ...VARIABLE_CATEGORIES.map(()=>P.green),
+      ...WELLBEING_CATEGORIES.map(()=>P.slate),
+      P.violet, P.gray];
+    hdrCols.forEach((h, ci) => sc(ws, 1, ci, h, ST.tblHdr(hdrBgs[ci]||P.indigoD)));
+
+    monKeys.forEach((m, idx) => {
+      const alt   = idx % 2 === 0;
+      const row   = idx + 2;
+      const total = monMap[m].total;
+      const prev  = idx > 0 ? monMap[monKeys[idx-1]].total : null;
+      const delta = prev !== null ? total - prev : null;
+      const pct   = totalInc > 0 ? total / totalInc : 0;
+      const isCur = m === curMon;
+      const rowBg = isCur ? P.indigoXL : alt ? P.grayXL : P.white;
+      const mFont = isCur ? mkFont(true, 11, P.indigo) : mkFont(false, 10, P.text);
+      const border = btBord(P.border);
+
+      sc(ws, row, 0, new Date(m+"-01").toLocaleDateString("en-IN",{month:"long",year:"numeric"}),
+         { font:mFont, fill:mkFill(rowBg), alignment:mkAlign("left"), border });
+      sc(ws, row, 1, total,
+         { font:mkFont(true,10,P.text), fill:mkFill(rowBg), alignment:mkAlign("right"), border }, RUPE);
+
+      // Delta cell — red/green background
+      if (delta !== null) {
+        const dBg  = delta > 0 ? "FEF2F2" : "ECFDF5";
+        const dClr = delta > 0 ? P.red : P.green;
+        const pfx  = delta > 0 ? "▲ " : "▼ ";
+        sc(ws, row, 2, delta,
+           { font:mkFont(true,10,dClr), fill:mkFill(dBg), alignment:mkAlign("right"), border }, RUPE);
+      } else {
+        sc(ws, row, 2, "First month",
+           { font:mkFont(false,10,P.muted), fill:mkFill(rowBg), alignment:mkAlign("center"), border });
+      }
+
+      sc(ws, row, 3, pct,
+         { font:mkFont(false,10, pct>0.9?P.red:pct>0.7?P.amber:P.green), fill:mkFill(rowBg), alignment:mkAlign("right"), border }, "0%");
+
+      let ci = 4;
+      CHART_CATS.forEach(c => {
+        const val = monMap[m][c.key] || 0;
+        const bg  = val > 0 ? (alt ? P.indigoXL : "F0F1FF") : rowBg;
+        sc(ws, row, ci++, val,
+           { font:mkFont(false,10, val>0?P.text:P.border), fill:mkFill(bg), alignment:mkAlign("right"), border },
+           RUPE);
+      });
+    });
+
+    // Total row
+    const tRow = monKeys.length + 2;
+    sc(ws, tRow, 0, "TOTAL", ST.totalLbl);
+    sc(ws, tRow, 1, totalExpenses, ST.totalVal, RUPE);
+    sc(ws, tRow, 2, "", ST.totalVal);
+    sc(ws, tRow, 3, totalInc>0 ? totalExpenses/totalInc : 0, ST.totalVal, "0%");
+    let ci = 4;
+    CHART_CATS.forEach(c => {
+      sc(ws, tRow, ci++, entries.reduce((s,e)=>s+catVal(e,c.key),0), ST.totalVal, RUPE);
+    });
+
+    ws["!views"] = [{ state:"frozen", xSplit:0, ySplit:2 }];
+    ws["!rows"] = [{ hpt:32 },{ hpt:26 },...monKeys.map(()=>({ hpt:20 })),{ hpt:24 }];
+    ws["!ref"] = XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:tRow,c:hdrCols.length-1} });
+    return ws;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET 4 — CATEGORY ANALYSIS
+  // ═══════════════════════════════════════════════════════════════════════════
+  function buildCategory() {
+    const ws = {};
+    ws["!cols"] = [{ wch:28 },{ wch:16 },{ wch:16 },{ wch:14 },{ wch:10 }];
+    ws["!rows"] = [{ hpt:32 },{ hpt:26 }];
+
+    const ranked = CHART_CATS.map(c => {
+      const val = entries.reduce((s,e)=>s+catVal(e,c.key),0);
+      return { ...c, val, pExp: totalExpenses?val/totalExpenses:0, pInc: totalInc?val/totalInc:0 };
+    }).filter(c=>c.val>0).sort((a,b)=>b.val-a.val);
+
+    // Title
+    fillMerge(ws, 0, 0, 4, ST.bigTitle);
+    sc(ws, 0, 0, "📊  CATEGORY ANALYSIS", ST.bigTitle);
+    mg(ws, 0, 0, 0, 4);
+
+    // Header
+    ["Category","Total Spent","% of Expenses","% of Income","Rank"].forEach((h,ci)=>
+      sc(ws, 1, ci, h, ST.tblHdr()));
+
+    // Rows
+    ranked.forEach((c, idx) => {
+      const row   = idx + 2;
+      const alt   = idx % 2 === 0;
+      const isTop = idx < 3;
+      // Top-3 get warm highlight backgrounds
+      const podiumBg = ["FEF2F2","FFF7ED","FFFBEB"][idx] || (alt ? P.grayXL : P.white);
+      const podiumClr= ["B91C1C","B45309","92400E"][idx]  || P.text;
+      const bg = isTop ? podiumBg : (alt ? P.grayXL : P.white);
+      const clr= isTop ? podiumClr : P.text;
+      const border = btBord(P.border);
+      const baseStyle = { fill:mkFill(bg), alignment:mkAlign("left"), border };
+
+      sc(ws, row, 0, `${c.icon}  ${c.label}`, { ...baseStyle, font:mkFont(isTop,10,clr) });
+      sc(ws, row, 1, c.val,  { ...baseStyle, font:mkFont(isTop,11,clr), alignment:mkAlign("right") }, RUPE);
+      sc(ws, row, 2, c.pExp, { ...baseStyle, font:mkFont(false,10,P.muted), alignment:mkAlign("right") }, "0.0%");
+      sc(ws, row, 3, c.pInc, { ...baseStyle, font:mkFont(false,10,P.muted), alignment:mkAlign("right") }, "0.0%");
+      sc(ws, row, 4, ["🥇 #1","🥈 #2","🥉 #3"][idx]||`#${idx+1}`,
+         { ...baseStyle, font:mkFont(isTop,10,clr), alignment:mkAlign("center") });
+      ws["!rows"].push({ hpt:20 });
+    });
+
+    // Total
+    const tRow = ranked.length + 2;
+    sc(ws, tRow, 0, "TOTAL", ST.totalLbl);
+    sc(ws, tRow, 1, totalExpenses, ST.totalVal, RUPE);
+    sc(ws, tRow, 2, 1, ST.totalVal, "0.0%");
+    sc(ws, tRow, 3, totalInc>0?totalExpenses/totalInc:0, ST.totalVal, "0.0%");
+    sc(ws, tRow, 4, "", ST.totalVal);
+    ws["!rows"].push({ hpt:24 });
+
+    ws["!ref"] = XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:tRow,c:4} });
+    return ws;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHEET 5 — DAY-OF-WEEK ANALYSIS
+  // ═══════════════════════════════════════════════════════════════════════════
+  function buildDayAnalysis() {
+    const ws = {};
+    ws["!cols"] = [{ wch:14 },{ wch:16 },{ wch:16 },{ wch:14 },{ wch:18 }];
+
+    const dowMap = {};
+    ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"].forEach((d,i)=>{
+      dowMap[i] = { day:d, total:0, count:0 };
+    });
+    entries.forEach(e => {
+      const d = new Date(e.date).getDay();
+      dowMap[d].total += e.total || eTotal(e);
+      dowMap[d].count += 1;
+    });
+
+    const sorted = Object.values(dowMap).sort((a,b)=>b.total-a.total);
+    const maxTot = Math.max(...sorted.map(d=>d.total), 1);
+
+    // Title
+    fillMerge(ws, 0, 0, 4, ST.bigTitle);
+    sc(ws, 0, 0, "📆  DAY OF WEEK ANALYSIS", ST.bigTitle);
+    mg(ws, 0, 0, 0, 4);
+
+    // Headers
+    ["Day","Total Spent","Avg per Entry","No. of Entries","Spend Bar"].forEach((h,ci)=>
+      sc(ws, 1, ci, h, ST.tblHdr()));
+
+    sorted.forEach(({ day, total, count }, idx) => {
+      const row   = idx + 2;
+      const alt   = idx % 2 === 0;
+      const isTop = idx === 0 && total > 0;
+      const bg    = isTop ? "FEF2F2" : alt ? P.grayXL : P.white;
+      const clr   = isTop ? P.red : P.text;
+      const avg   = count > 0 ? total / count : 0;
+      const bars  = Math.round((total / maxTot) * 20);
+      const bar   = "█".repeat(bars) + "░".repeat(20 - bars);
+      const border = btBord(P.border);
+
+      sc(ws, row, 0, day,   { font:mkFont(isTop,10,clr), fill:mkFill(bg), alignment:mkAlign("left"),   border });
+      sc(ws, row, 1, total, { font:mkFont(isTop,11,clr), fill:mkFill(bg), alignment:mkAlign("right"),  border }, RUPE);
+      sc(ws, row, 2, avg,   { font:mkFont(false,10,P.muted),fill:mkFill(bg),alignment:mkAlign("right"),border }, RUPE);
+      sc(ws, row, 3, count, { font:mkFont(false,10,P.text), fill:mkFill(bg),alignment:mkAlign("center"),border });
+      sc(ws, row, 4, bar,   { font:{ ...mkFont(false,8,isTop?P.red:P.indigo), name:"Courier New" },
+                               fill:mkFill(bg), alignment:mkAlign("left"), border });
+    });
+
+    ws["!rows"] = [{ hpt:32 },{ hpt:26 },...sorted.map(()=>({ hpt:22 }))];
+    ws["!ref"] = XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:sorted.length+1,c:4} });
+    return ws;
+  }
+
+  // ── Build & write ──────────────────────────────────────────────────────────
+  const wb = XLSX.utils.book_new();
+  wb.Props = { Title:"Budget Tracker Report", Subject:"Personal Finance", Author:"Budget Tracker", CreatedDate:new Date() };
+
+  XLSX.utils.book_append_sheet(wb, buildSummary(),     "Summary");
+  XLSX.utils.book_append_sheet(wb, buildEntries(),     "All Entries");
+  XLSX.utils.book_append_sheet(wb, buildMonthly(),     "Monthly Breakdown");
+  XLSX.utils.book_append_sheet(wb, buildCategory(),    "Category Analysis");
+  XLSX.utils.book_append_sheet(wb, buildDayAnalysis(), "Day of Week");
+
+  XLSX.writeFile(wb, `budget-report-${today()}.xlsx`, { cellStyles:true, bookSST:false });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -354,14 +619,35 @@ export default function BudgetTracker() {
   const [darkMode, setDarkMode]             = useState(saved?.darkMode ?? false);
   const [histSearch, setHistSearch]         = useState("");
   const [histMonth, setHistMonth]           = useState("");
+  // Quick-add modal
+  const [qaOpen, setQaOpen]       = useState(false);
+  const [qaCat, setQaCat]         = useState(saved?.lastCat ?? "food");
+  const [qaAmount, setQaAmount]   = useState("");
+  const [qaNote, setQaNote]       = useState("");
+  const [qaDate, setQaDate]       = useState(today());
+  const qaAmtRef = useRef(null);
   const notifTimer = useRef(null);
   const mainRef    = useRef(null);
   const importRef  = useRef(null);
 
   // ── Persist ────────────────────────────────────────────────────────────────
   useEffect(() => {
-    saveState({ bankBalance, carryForward, incomes, entries, darkMode });
-  }, [bankBalance, carryForward, incomes, entries, darkMode]);
+    saveState({ bankBalance, carryForward, incomes, entries, darkMode, lastCat: qaCat });
+  }, [bankBalance, carryForward, incomes, entries, darkMode, qaCat]);
+
+  // ── Keyboard shortcut: press Q anywhere (not in input) to open quick add ──
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "q" || e.key === "Q") {
+        const tag = document.activeElement?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        setQaDate(today()); setQaAmount(""); setQaNote(""); setQaOpen(true);
+      }
+      if (e.key === "Escape") setQaOpen(false);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
@@ -569,6 +855,18 @@ export default function BudgetTracker() {
 
   const delEntry = (id) => { if (!confirm("Delete this entry?")) return; setEntries(p => p.filter(e => e.id !== id)); toast("Entry deleted"); };
   const addInc   = () => setIncomes(p => [...p, mkInc()]);
+
+  // ── Quick Add save ─────────────────────────────────────────────────────────
+  const saveQuickAdd = useCallback(() => {
+    const amt = parseFloat(qaAmount);
+    if (!amt || amt <= 0) { toast("Enter a valid amount", "error"); return; }
+    const entry = { ...initScalar, date: qaDate, note: qaNote, subscriptions: [], others: [],
+      [qaCat]: String(amt), total: amt, id: uid(), quick: true };
+    setEntries(prev => [entry, ...prev]);
+    setQaCat(qaCat); // remember last category
+    setQaAmount(""); setQaNote(""); setQaOpen(false);
+    toast(`${CHART_CATS.find(c=>c.key===qaCat)?.icon || "✓"} ${fmt(amt)} added`);
+  }, [qaAmount, qaDate, qaNote, qaCat]);
   const updInc   = (id, f, v) => setIncomes(p => p.map(i => i.id === id ? { ...i, [f]: v } : i));
   const remInc   = (id) => setIncomes(p => p.filter(i => i.id !== id));
 
@@ -714,20 +1012,27 @@ export default function BudgetTracker() {
                 </section>
 
                 {/* Metrics */}
-                <div className="metrics-grid">
-                  {[
-                    { label: "Bank Balance",  val: fmt(parseFloat(bankBalance) || 0), sub: "Current balance",     color: "#4f46e5" },
-                    { label: "This Month",    val: fmt(monthTotal),                   sub: `${monthEntries.length} entries`, color: "var(--red)" },
-                    { label: "This Week",     val: fmt(weekTotal),                    sub: `${weekEntries.length} entries`,  color: "#b45309" },
-                    { label: "Money Left",    val: fmt(netBalance),                   sub: "After all expenses",   color: balColor },
-                  ].map(m => (
-                    <div key={m.label} className="metric-card">
-                      <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600, marginBottom: 6 }}>{m.label}</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: m.color, fontFamily: "monospace" }}>{m.val}</div>
-                      <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{m.sub}</div>
+                {(() => {
+                  const todayEntries = entries.filter(e => e.date === today());
+                  const todayTotal   = todayEntries.reduce((s, e) => s + e.total, 0);
+                  return (
+                    <div className="metrics-grid">
+                      {[
+                        { label: "Today",        val: fmt(todayTotal),                   sub: `${todayEntries.length} entries today`,  color: todayTotal > 0 ? "var(--red)" : "var(--text-muted)", highlight: true },
+                        { label: "This Month",   val: fmt(monthTotal),                   sub: `${monthEntries.length} entries`, color: "var(--red)" },
+                        { label: "Money Left",   val: fmt(netBalance),                   sub: "After all expenses",   color: balColor },
+                        { label: "Bank Balance", val: fmt(parseFloat(bankBalance) || 0), sub: "Current balance",     color: "#4f46e5" },
+                      ].map(m => (
+                        <div key={m.label} className={`metric-card${m.highlight ? " metric-today" : ""}`}
+                          style={m.highlight ? { borderColor: todayTotal > 0 ? "rgba(185,28,28,0.2)" : "var(--border)" } : {}}>
+                          <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600, marginBottom: 6 }}>{m.label}</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: m.color, fontFamily: "monospace" }}>{m.val}</div>
+                          <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{m.sub}</div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  );
+                })()}
 
                 {/* Budget progress */}
                 {totalIncome > 0 && (
@@ -1206,6 +1511,94 @@ export default function BudgetTracker() {
           </div>
         )}
       </main>
+
+      {/* ── Floating Quick Add Button ── */}
+      <button
+        className="qa-fab"
+        onClick={() => { setQaDate(today()); setQaAmount(""); setQaNote(""); setQaOpen(true); }}
+        aria-label="Quick add expense (Q)"
+        title="Quick Add (press Q)"
+      >
+        <span style={{ fontSize: 26, lineHeight: 1 }}>+</span>
+      </button>
+
+      {/* ── Quick Add Modal ── */}
+      {qaOpen && (
+        <div className="qa-overlay" onClick={e => { if (e.target === e.currentTarget) setQaOpen(false); }}>
+          <div className="qa-modal" role="dialog" aria-modal="true" aria-label="Quick Add Expense">
+            {/* Header */}
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: 18 }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700, color:"var(--text)", fontFamily:"'Playfair Display',serif" }}>⚡ Quick Add</div>
+                <div style={{ fontSize: 12, color:"var(--text-muted)", fontWeight: 500, marginTop: 2 }}>Press Q anytime to open · Esc to close</div>
+              </div>
+              <button onClick={() => setQaOpen(false)} style={{ background:"none", border:"none", cursor:"pointer", fontSize: 20, color:"var(--text-muted)", lineHeight:1, padding: 4 }} aria-label="Close">✕</button>
+            </div>
+
+            {/* Date */}
+            <div style={{ marginBottom: 16 }}>
+              <label style={S.label}>Date</label>
+              <input className="inp" type="date" value={qaDate} onChange={e => setQaDate(e.target.value)} style={{ maxWidth: 180 }} />
+            </div>
+
+            {/* Category grid */}
+            <div style={{ marginBottom: 16 }}>
+              <label style={S.label}>Category</label>
+              <div className="qa-cat-grid">
+                {CHART_CATS.filter(c => c.key !== "subscriptions" && c.key !== "other").map(c => (
+                  <button key={c.key} className={`qa-cat-btn${qaCat === c.key ? " selected" : ""}`}
+                    onClick={() => { setQaCat(c.key); qaAmtRef.current?.focus(); }}
+                    title={c.label}
+                    style={{ borderColor: qaCat === c.key ? c.fill : "var(--border)", background: qaCat === c.key ? c.fill + "18" : "var(--input-bg)" }}>
+                    <span style={{ fontSize: 22 }}>{c.icon}</span>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: qaCat === c.key ? c.color : "var(--text-muted)", lineHeight: 1.2, marginTop: 3 }}>{c.label.split(" ")[0]}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Amount — big, prominent */}
+            <div style={{ marginBottom: 14 }}>
+              <label style={S.label}>Amount (₹)</label>
+              <div style={{ display:"flex", alignItems:"center", gap: 0, border:"2px solid #4f46e5", borderRadius: 12, background:"var(--input-bg)", overflow:"hidden" }}>
+                <span style={{ padding:"0 14px", fontSize: 20, color:"#4f46e5", fontWeight: 700 }}>₹</span>
+                <input
+                  ref={qaAmtRef}
+                  className="inp"
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="0"
+                  value={qaAmount}
+                  onChange={e => setQaAmount(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") saveQuickAdd(); }}
+                  autoFocus
+                  style={{ border:"none", background:"transparent", fontSize: 28, fontWeight: 700, padding:"12px 14px 12px 0", flex: 1, color:"var(--text)", fontFamily:"monospace" }}
+                />
+                {qaAmount && <span style={{ padding:"0 14px", fontSize: 14, fontWeight: 700, color:"#4f46e5", fontFamily:"monospace" }}>{fmt(parseFloat(qaAmount)||0)}</span>}
+              </div>
+            </div>
+
+            {/* Note */}
+            <div style={{ marginBottom: 20 }}>
+              <label style={S.label}>Note (optional)</label>
+              <input className="inp" type="text" placeholder="e.g. lunch at office, auto to station…"
+                value={qaNote} onChange={e => setQaNote(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") saveQuickAdd(); }} />
+            </div>
+
+            {/* Save */}
+            <button className="btn-primary" onClick={saveQuickAdd}
+              style={{ width:"100%", padding: 16, fontSize: 16, borderRadius: 12, minHeight: 54,
+                       display:"flex", alignItems:"center", justifyContent:"center", gap: 10 }}>
+              <span>Save Expense</span>
+              {qaAmount && parseFloat(qaAmount) > 0 && (
+                <span style={{ background:"rgba(255,255,255,0.25)", borderRadius: 8, padding:"2px 10px", fontFamily:"monospace" }}>{fmt(parseFloat(qaAmount))}</span>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1456,5 +1849,28 @@ const CSS = `
   }
   @media (max-width: 480px) {
     .field-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ── Quick Add FAB ── */
+  .qa-fab { position: fixed; bottom: 28px; right: 28px; z-index: 400; width: 62px; height: 62px; border-radius: 50%; background: #4f46e5; color: #fff; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 24px rgba(79,70,229,0.45); transition: transform .18s ease, box-shadow .18s ease, background .15s; font-family: 'Inter', system-ui, sans-serif; }
+  .qa-fab:hover { background: #3730a3; transform: scale(1.08); box-shadow: 0 6px 32px rgba(79,70,229,0.55); }
+  .qa-fab:active { transform: scale(0.96); }
+  .qa-fab:focus-visible { outline: 3px solid #4f46e5; outline-offset: 4px; }
+  .qa-overlay { position: fixed; inset: 0; z-index: 500; background: rgba(0,0,0,0.45); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 16px; animation: fadeIn .15s ease; }
+  @keyframes fadeIn { from { opacity:0 } to { opacity:1 } }
+  .qa-modal { background: var(--card); border-radius: 20px; border: 1px solid var(--border); padding: 24px; width: 100%; max-width: 480px; box-shadow: 0 24px 64px rgba(0,0,0,0.22); animation: slideUp .2s ease; max-height: 90vh; overflow-y: auto; }
+  @keyframes slideUp { from { transform: translateY(20px); opacity:0 } to { transform: translateY(0); opacity:1 } }
+  .qa-cat-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+  .qa-cat-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 8px 4px; border-radius: 10px; border: 2px solid var(--border); cursor: pointer; background: var(--input-bg); transition: all .15s; gap: 3px; font-family: 'Inter', system-ui, sans-serif; min-height: 58px; }
+  .qa-cat-btn:hover { transform: translateY(-2px); box-shadow: 0 3px 10px rgba(0,0,0,0.08); }
+  .qa-cat-btn.selected { box-shadow: 0 2px 12px rgba(79,70,229,0.2); }
+  @media (max-width: 600px) {
+    .qa-fab { bottom: 20px; right: 20px; width: 56px; height: 56px; }
+    .qa-modal { padding: 20px; border-radius: 16px; }
+    .qa-cat-grid { grid-template-columns: repeat(5, 1fr); gap: 6px; }
+    .qa-cat-btn { padding: 6px 2px; min-height: 52px; }
+  }
+  @media (max-width: 400px) {
+    .qa-cat-grid { grid-template-columns: repeat(4, 1fr); }
   }
 `;
