@@ -619,14 +619,35 @@ export default function BudgetTracker() {
   const [darkMode, setDarkMode]             = useState(saved?.darkMode ?? false);
   const [histSearch, setHistSearch]         = useState("");
   const [histMonth, setHistMonth]           = useState("");
+  // Quick-add modal
+  const [qaOpen, setQaOpen]       = useState(false);
+  const [qaCat, setQaCat]         = useState(saved?.lastCat ?? "food");
+  const [qaAmount, setQaAmount]   = useState("");
+  const [qaNote, setQaNote]       = useState("");
+  const [qaDate, setQaDate]       = useState(today());
+  const qaAmtRef = useRef(null);
   const notifTimer = useRef(null);
   const mainRef    = useRef(null);
   const importRef  = useRef(null);
 
   // ── Persist ────────────────────────────────────────────────────────────────
   useEffect(() => {
-    saveState({ bankBalance, carryForward, incomes, entries, darkMode });
-  }, [bankBalance, carryForward, incomes, entries, darkMode]);
+    saveState({ bankBalance, carryForward, incomes, entries, darkMode, lastCat: qaCat });
+  }, [bankBalance, carryForward, incomes, entries, darkMode, qaCat]);
+
+  // ── Keyboard shortcut: press Q anywhere (not in input) to open quick add ──
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "q" || e.key === "Q") {
+        const tag = document.activeElement?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        setQaDate(today()); setQaAmount(""); setQaNote(""); setQaOpen(true);
+      }
+      if (e.key === "Escape") setQaOpen(false);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
@@ -834,6 +855,18 @@ export default function BudgetTracker() {
 
   const delEntry = (id) => { if (!confirm("Delete this entry?")) return; setEntries(p => p.filter(e => e.id !== id)); toast("Entry deleted"); };
   const addInc   = () => setIncomes(p => [...p, mkInc()]);
+
+  // ── Quick Add save ─────────────────────────────────────────────────────────
+  const saveQuickAdd = useCallback(() => {
+    const amt = parseFloat(qaAmount);
+    if (!amt || amt <= 0) { toast("Enter a valid amount", "error"); return; }
+    const entry = { ...initScalar, date: qaDate, note: qaNote, subscriptions: [], others: [],
+      [qaCat]: String(amt), total: amt, id: uid(), quick: true };
+    setEntries(prev => [entry, ...prev]);
+    setQaCat(qaCat); // remember last category
+    setQaAmount(""); setQaNote(""); setQaOpen(false);
+    toast(`${CHART_CATS.find(c=>c.key===qaCat)?.icon || "✓"} ${fmt(amt)} added`);
+  }, [qaAmount, qaDate, qaNote, qaCat]);
   const updInc   = (id, f, v) => setIncomes(p => p.map(i => i.id === id ? { ...i, [f]: v } : i));
   const remInc   = (id) => setIncomes(p => p.filter(i => i.id !== id));
 
@@ -979,20 +1012,27 @@ export default function BudgetTracker() {
                 </section>
 
                 {/* Metrics */}
-                <div className="metrics-grid">
-                  {[
-                    { label: "Bank Balance",  val: fmt(parseFloat(bankBalance) || 0), sub: "Current balance",     color: "#4f46e5" },
-                    { label: "This Month",    val: fmt(monthTotal),                   sub: `${monthEntries.length} entries`, color: "var(--red)" },
-                    { label: "This Week",     val: fmt(weekTotal),                    sub: `${weekEntries.length} entries`,  color: "#b45309" },
-                    { label: "Money Left",    val: fmt(netBalance),                   sub: "After all expenses",   color: balColor },
-                  ].map(m => (
-                    <div key={m.label} className="metric-card">
-                      <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600, marginBottom: 6 }}>{m.label}</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: m.color, fontFamily: "monospace" }}>{m.val}</div>
-                      <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{m.sub}</div>
+                {(() => {
+                  const todayEntries = entries.filter(e => e.date === today());
+                  const todayTotal   = todayEntries.reduce((s, e) => s + e.total, 0);
+                  return (
+                    <div className="metrics-grid">
+                      {[
+                        { label: "Today",        val: fmt(todayTotal),                   sub: `${todayEntries.length} entries today`,  color: todayTotal > 0 ? "var(--red)" : "var(--text-muted)", highlight: true },
+                        { label: "This Month",   val: fmt(monthTotal),                   sub: `${monthEntries.length} entries`, color: "var(--red)" },
+                        { label: "Money Left",   val: fmt(netBalance),                   sub: "After all expenses",   color: balColor },
+                        { label: "Bank Balance", val: fmt(parseFloat(bankBalance) || 0), sub: "Current balance",     color: "#4f46e5" },
+                      ].map(m => (
+                        <div key={m.label} className={`metric-card${m.highlight ? " metric-today" : ""}`}
+                          style={m.highlight ? { borderColor: todayTotal > 0 ? "rgba(185,28,28,0.2)" : "var(--border)" } : {}}>
+                          <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600, marginBottom: 6 }}>{m.label}</div>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: m.color, fontFamily: "monospace" }}>{m.val}</div>
+                          <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{m.sub}</div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  );
+                })()}
 
                 {/* Budget progress */}
                 {totalIncome > 0 && (
@@ -1471,6 +1511,94 @@ export default function BudgetTracker() {
           </div>
         )}
       </main>
+
+      {/* ── Floating Quick Add Button ── */}
+      <button
+        className="qa-fab"
+        onClick={() => { setQaDate(today()); setQaAmount(""); setQaNote(""); setQaOpen(true); }}
+        aria-label="Quick add expense (Q)"
+        title="Quick Add (press Q)"
+      >
+        <span style={{ fontSize: 26, lineHeight: 1 }}>+</span>
+      </button>
+
+      {/* ── Quick Add Modal ── */}
+      {qaOpen && (
+        <div className="qa-overlay" onClick={e => { if (e.target === e.currentTarget) setQaOpen(false); }}>
+          <div className="qa-modal" role="dialog" aria-modal="true" aria-label="Quick Add Expense">
+            {/* Header */}
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: 18 }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700, color:"var(--text)", fontFamily:"'Playfair Display',serif" }}>⚡ Quick Add</div>
+                <div style={{ fontSize: 12, color:"var(--text-muted)", fontWeight: 500, marginTop: 2 }}>Press Q anytime to open · Esc to close</div>
+              </div>
+              <button onClick={() => setQaOpen(false)} style={{ background:"none", border:"none", cursor:"pointer", fontSize: 20, color:"var(--text-muted)", lineHeight:1, padding: 4 }} aria-label="Close">✕</button>
+            </div>
+
+            {/* Date */}
+            <div style={{ marginBottom: 16 }}>
+              <label style={S.label}>Date</label>
+              <input className="inp" type="date" value={qaDate} onChange={e => setQaDate(e.target.value)} style={{ maxWidth: 180 }} />
+            </div>
+
+            {/* Category grid */}
+            <div style={{ marginBottom: 16 }}>
+              <label style={S.label}>Category</label>
+              <div className="qa-cat-grid">
+                {CHART_CATS.filter(c => c.key !== "subscriptions" && c.key !== "other").map(c => (
+                  <button key={c.key} className={`qa-cat-btn${qaCat === c.key ? " selected" : ""}`}
+                    onClick={() => { setQaCat(c.key); qaAmtRef.current?.focus(); }}
+                    title={c.label}
+                    style={{ borderColor: qaCat === c.key ? c.fill : "var(--border)", background: qaCat === c.key ? c.fill + "18" : "var(--input-bg)" }}>
+                    <span style={{ fontSize: 22 }}>{c.icon}</span>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: qaCat === c.key ? c.color : "var(--text-muted)", lineHeight: 1.2, marginTop: 3 }}>{c.label.split(" ")[0]}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Amount — big, prominent */}
+            <div style={{ marginBottom: 14 }}>
+              <label style={S.label}>Amount (₹)</label>
+              <div style={{ display:"flex", alignItems:"center", gap: 0, border:"2px solid #4f46e5", borderRadius: 12, background:"var(--input-bg)", overflow:"hidden" }}>
+                <span style={{ padding:"0 14px", fontSize: 20, color:"#4f46e5", fontWeight: 700 }}>₹</span>
+                <input
+                  ref={qaAmtRef}
+                  className="inp"
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="0"
+                  value={qaAmount}
+                  onChange={e => setQaAmount(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") saveQuickAdd(); }}
+                  autoFocus
+                  style={{ border:"none", background:"transparent", fontSize: 28, fontWeight: 700, padding:"12px 14px 12px 0", flex: 1, color:"var(--text)", fontFamily:"monospace" }}
+                />
+                {qaAmount && <span style={{ padding:"0 14px", fontSize: 14, fontWeight: 700, color:"#4f46e5", fontFamily:"monospace" }}>{fmt(parseFloat(qaAmount)||0)}</span>}
+              </div>
+            </div>
+
+            {/* Note */}
+            <div style={{ marginBottom: 20 }}>
+              <label style={S.label}>Note (optional)</label>
+              <input className="inp" type="text" placeholder="e.g. lunch at office, auto to station…"
+                value={qaNote} onChange={e => setQaNote(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") saveQuickAdd(); }} />
+            </div>
+
+            {/* Save */}
+            <button className="btn-primary" onClick={saveQuickAdd}
+              style={{ width:"100%", padding: 16, fontSize: 16, borderRadius: 12, minHeight: 54,
+                       display:"flex", alignItems:"center", justifyContent:"center", gap: 10 }}>
+              <span>Save Expense</span>
+              {qaAmount && parseFloat(qaAmount) > 0 && (
+                <span style={{ background:"rgba(255,255,255,0.25)", borderRadius: 8, padding:"2px 10px", fontFamily:"monospace" }}>{fmt(parseFloat(qaAmount))}</span>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1721,5 +1849,28 @@ const CSS = `
   }
   @media (max-width: 480px) {
     .field-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ── Quick Add FAB ── */
+  .qa-fab { position: fixed; bottom: 28px; right: 28px; z-index: 400; width: 62px; height: 62px; border-radius: 50%; background: #4f46e5; color: #fff; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 24px rgba(79,70,229,0.45); transition: transform .18s ease, box-shadow .18s ease, background .15s; font-family: 'Inter', system-ui, sans-serif; }
+  .qa-fab:hover { background: #3730a3; transform: scale(1.08); box-shadow: 0 6px 32px rgba(79,70,229,0.55); }
+  .qa-fab:active { transform: scale(0.96); }
+  .qa-fab:focus-visible { outline: 3px solid #4f46e5; outline-offset: 4px; }
+  .qa-overlay { position: fixed; inset: 0; z-index: 500; background: rgba(0,0,0,0.45); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 16px; animation: fadeIn .15s ease; }
+  @keyframes fadeIn { from { opacity:0 } to { opacity:1 } }
+  .qa-modal { background: var(--card); border-radius: 20px; border: 1px solid var(--border); padding: 24px; width: 100%; max-width: 480px; box-shadow: 0 24px 64px rgba(0,0,0,0.22); animation: slideUp .2s ease; max-height: 90vh; overflow-y: auto; }
+  @keyframes slideUp { from { transform: translateY(20px); opacity:0 } to { transform: translateY(0); opacity:1 } }
+  .qa-cat-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+  .qa-cat-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 8px 4px; border-radius: 10px; border: 2px solid var(--border); cursor: pointer; background: var(--input-bg); transition: all .15s; gap: 3px; font-family: 'Inter', system-ui, sans-serif; min-height: 58px; }
+  .qa-cat-btn:hover { transform: translateY(-2px); box-shadow: 0 3px 10px rgba(0,0,0,0.08); }
+  .qa-cat-btn.selected { box-shadow: 0 2px 12px rgba(79,70,229,0.2); }
+  @media (max-width: 600px) {
+    .qa-fab { bottom: 20px; right: 20px; width: 56px; height: 56px; }
+    .qa-modal { padding: 20px; border-radius: 16px; }
+    .qa-cat-grid { grid-template-columns: repeat(5, 1fr); gap: 6px; }
+    .qa-cat-btn { padding: 6px 2px; min-height: 52px; }
+  }
+  @media (max-width: 400px) {
+    .qa-cat-grid { grid-template-columns: repeat(4, 1fr); }
   }
 `;
