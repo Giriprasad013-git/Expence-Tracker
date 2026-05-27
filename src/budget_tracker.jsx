@@ -37,6 +37,7 @@ const CHART_CATS = [
 ];
 const INCOME_TYPES = ["Salary", "Freelance", "Business", "Rental", "Other"];
 const STORAGE_KEY  = "budget_tracker_v2";
+const BACKUP_KEY   = "budget_tracker_last_backup";
 const DAYS         = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -635,6 +636,28 @@ export default function BudgetTracker() {
     saveState({ bankBalance, carryForward, incomes, entries, darkMode, lastCat: qaCat });
   }, [bankBalance, carryForward, incomes, entries, darkMode, qaCat]);
 
+  // ── Auto weekly backup ──────────────────────────────────────────────────────
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const last = localStorage.getItem(BACKUP_KEY);
+      const daysSince = last ? (Date.now() - Number(last)) / 86400000 : Infinity;
+      if (daysSince < 7) return;
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      try {
+        const data = JSON.parse(raw);
+        if (!data?.entries?.length) return;
+        const blob = new Blob([JSON.stringify({ ...data, exportedAt: new Date().toISOString() }, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        Object.assign(document.createElement("a"), { href: url, download: `budget-backup-${today()}.json` }).click();
+        URL.revokeObjectURL(url);
+        localStorage.setItem(BACKUP_KEY, String(Date.now()));
+        toast("📦 Weekly backup downloaded");
+      } catch {}
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, []);
+
   // ── Keyboard shortcut: press Q anywhere (not in input) to open quick add ──
   useEffect(() => {
     const handler = (e) => {
@@ -895,8 +918,9 @@ export default function BudgetTracker() {
     const data = { bankBalance, carryForward, incomes, entries, exportedAt: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url  = URL.createObjectURL(blob);
-    Object.assign(document.createElement("a"), { href: url, download: "budget-backup.json" }).click();
+    Object.assign(document.createElement("a"), { href: url, download: `budget-backup-${today()}.json` }).click();
     URL.revokeObjectURL(url);
+    localStorage.setItem(BACKUP_KEY, String(Date.now()));
     toast("JSON exported");
   };
 
@@ -1284,7 +1308,10 @@ export default function BudgetTracker() {
 
             {/* Export bar */}
             <div className="card" style={{ padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-muted)" }}>📊 Export Report</span>
+              <div>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-muted)" }}>📊 Export Report</span>
+                {(() => { const t = localStorage.getItem(BACKUP_KEY); return t ? <span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 10 }}>Last backup: {Math.floor((Date.now()-Number(t))/86400000)}d ago</span> : null; })()}
+              </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button className="btn-sm btn-excel" onClick={doExportExcel} style={{ minHeight: 36 }}>📊 Excel (5 sheets)</button>
                 <button className="btn-sm" onClick={exportCSV} style={{ minHeight: 36 }}>📥 CSV</button>
