@@ -1587,7 +1587,7 @@ export default function BudgetTracker() {
             {/* Amount — big, prominent */}
             <div style={{ marginBottom: 14 }}>
               <label style={S.label}>Amount (₹)</label>
-              <div style={{ display:"flex", alignItems:"center", gap: 0, border:"2px solid #4f46e5", borderRadius: 12, background:"var(--input-bg)", overflow:"hidden" }}>
+              <div className="inp-group" style={{ borderRadius: 12, borderWidth: 2 }}>
                 <span style={{ padding:"0 14px", fontSize: 20, color:"#4f46e5", fontWeight: 700 }}>₹</span>
                 <input
                   ref={qaAmtRef}
@@ -1600,7 +1600,7 @@ export default function BudgetTracker() {
                   onChange={e => setQaAmount(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter") saveQuickAdd(); }}
                   autoFocus
-                  style={{ border:"none", background:"transparent", fontSize: 28, fontWeight: 700, padding:"12px 14px 12px 0", flex: 1, color:"var(--text)", fontFamily:"monospace" }}
+                  style={{ border:"none", borderRadius: 0, background:"transparent", fontSize: 28, fontWeight: 700, padding:"12px 14px 12px 0", flex: 1, color:"var(--text)", fontFamily:"monospace", outline:"none", boxShadow:"none" }}
                 />
                 {qaAmount && <span style={{ padding:"0 14px", fontSize: 14, fontWeight: 700, color:"#4f46e5", fontFamily:"monospace" }}>{fmt(parseFloat(qaAmount)||0)}</span>}
               </div>
@@ -1656,7 +1656,7 @@ function ScalarField({ cat, value, onChange }) {
   return (
     <div style={S.fieldWrap}>
       <label htmlFor={`f-${cat.key}`} style={S.label}>{cat.icon} {cat.label}</label>
-      <div style={S.amtRow}>
+      <div className="inp-group">
         <span style={S.rupee}>₹</span>
         <input id={`f-${cat.key}`} className="inp" type="number" min="0" placeholder="0" value={value} onChange={onChange} style={S.amtInp} aria-label={`${cat.label} in rupees`} />
       </div>
@@ -1672,7 +1672,7 @@ function MultiRows({ rows, setRows, label }) {
           <input className="inp" type="text" placeholder={`${label} name`} value={row.name}
             onChange={e => setRows(p => p.map(r => r.id === row.id ? { ...r, name: e.target.value } : r))}
             style={{ flex: "2 1 140px" }} aria-label={`${label} ${i+1} name`} />
-          <div style={{ ...S.amtRow, flex: "1 1 110px" }}>
+          <div className="inp-group" style={{ flex: "1 1 110px" }}>
             <span style={S.rupee}>₹</span>
             <input className="inp" type="number" min="0" placeholder="0" value={row.amount}
               onChange={e => setRows(p => p.map(r => r.id === row.id ? { ...r, amount: e.target.value } : r))}
@@ -1772,9 +1772,9 @@ const S = {
   label:      { fontSize: 13, color: "var(--text-muted)", fontWeight: 600, display: "block", marginBottom: 6, fontFamily: "'Inter', system-ui, sans-serif" },
   displayBox: { flex: 1, padding: "10px 14px", borderRadius: 8, background: "var(--input-bg)", fontSize: 15, fontWeight: 700, color: "var(--text)", fontFamily: "monospace", border: "1px solid var(--border)" },
   fieldWrap:  { display: "flex", flexDirection: "column" },
-  amtRow:     { display: "flex", alignItems: "center", border: "1px solid var(--border)", borderRadius: 8, background: "var(--input-bg)", overflow: "hidden" },
+  amtRow:     { display: "flex", alignItems: "center", border: "1px solid var(--border)", borderRadius: 8, background: "var(--input-bg)", overflow: "hidden", transition: "border-color .15s, box-shadow .15s" },
   rupee:      { padding: "0 8px", fontSize: 15, color: "#4f46e5", fontWeight: 700, userSelect: "none" },
-  amtInp:     { flex: 1, border: "none", background: "transparent", padding: "10px 8px 10px 0", fontSize: 14, outline: "none", color: "var(--text)", minWidth: 0 },
+  amtInp:     { flex: 1, border: "none", borderRadius: 0, background: "transparent", padding: "10px 8px 10px 0", fontSize: 14, outline: "none", color: "var(--text)", minWidth: 0, boxShadow: "none" },
   addMoreBtn: { fontSize: 13, color: "#4f46e5", background: "none", border: "1.5px dashed #4f46e5", borderRadius: 6, padding: "6px 14px", cursor: "pointer", marginTop: 4, fontWeight: 700, minHeight: 36 },
   rmBtn:      { background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", fontSize: 13, padding: "6px 10px", color: "var(--red)", minHeight: 36, fontWeight: 700 },
   incTotal:   { marginTop: 10, padding: "10px 14px", borderRadius: 8, background: "rgba(79,70,229,0.06)", border: "1px solid rgba(79,70,229,0.15)", display: "flex", justifyContent: "space-between", alignItems: "center" },
@@ -1814,6 +1814,10 @@ const CSS = `
   .inp { width: 100%; padding: 10px 13px; border-radius: 8px; border: 1px solid var(--border); font-size: 14px; background: var(--input-bg); color: var(--text); box-sizing: border-box; font-family: 'Inter', system-ui, sans-serif; font-weight: 500; transition: border-color .15s, box-shadow .15s; }
   .inp:focus { outline: none; border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79,70,229,.15); }
   .inp option { background: var(--card); color: var(--text); }
+  /* Grouped inputs (₹ prefix + input) — container owns the border, input is flat */
+  .inp-group { display: flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; background: var(--input-bg); overflow: hidden; transition: border-color .15s, box-shadow .15s; }
+  .inp-group:focus-within { border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79,70,229,.15); }
+  .inp-group .inp, .inp-group input { border: none !important; border-radius: 0 !important; box-shadow: none !important; background: transparent; }
 
   .btn-primary { background: #4f46e5; color: #fff; border: none; border-radius: 10px; padding: 11px 24px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .2s; font-family: 'Inter', system-ui, sans-serif; letter-spacing: 0.01em; }
   .btn-primary:hover { background: #3730a3; }
