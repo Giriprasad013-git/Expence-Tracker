@@ -34,12 +34,13 @@ const CHART_CATS = [
   { key: "other",         label: "Other",          icon: "📦", color: "#475569", fill: "#94a3b8" },
 ];
 const INCOME_TYPES = ["Salary", "Freelance", "Business", "Rental", "Other"];
+const STORAGE_KEY = "budget_tracker_v2";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
-const fmt    = (n) => `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
-const today  = () => new Date().toISOString().split("T")[0];
+const fmt     = (n) => `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+const today   = () => new Date().toISOString().split("T")[0];
 const getWeek = (d) => { const dt = new Date(d); const day = dt.getDay(); const diff = dt.getDate() - day + (day === 0 ? -6 : 1); return new Date(dt.setDate(diff)).toISOString().split("T")[0]; };
 const getMon  = (d) => d.slice(0, 7);
 const uid     = () => `${Date.now()}-${Math.random()}`;
@@ -52,18 +53,33 @@ ALL_SCALAR.forEach((c) => { initScalar[c.key] = ""; });
 const TABS = ["Dashboard", "Add Entry", "History", "Analytics"];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// localStorage helpers
+// ─────────────────────────────────────────────────────────────────────────────
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+
+function saveState(state) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Custom Pie Tooltip
 // ─────────────────────────────────────────────────────────────────────────────
 function PieTooltip({ active, payload }) {
   if (!active || !payload?.length) return null;
   const d = payload[0];
   return (
-    <div role="tooltip" style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: "10px 14px", fontSize: 13, boxShadow: "0 4px 20px rgba(0,0,0,0.12)", minWidth: 170, zIndex: 9999 }}>
+    <div role="tooltip" style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px", fontSize: 13, boxShadow: "0 4px 20px rgba(0,0,0,0.15)", minWidth: 170, zIndex: 9999 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
         <span aria-hidden="true" style={{ width: 12, height: 12, borderRadius: "50%", background: d.payload?.fill, flexShrink: 0, display: "inline-block" }} />
-        <span style={{ fontWeight: 700, color: "#1a202c" }}>{d.payload?.icon} {d.name}</span>
+        <span style={{ fontWeight: 700, color: "var(--text)" }}>{d.payload?.icon} {d.name}</span>
       </div>
-      <div style={{ color: "#1a202c", fontWeight: 700, fontFamily: "monospace", fontSize: 16 }}>{fmt(d.value)}</div>
+      <div style={{ color: "var(--text)", fontWeight: 700, fontFamily: "monospace", fontSize: 16 }}>{fmt(d.value)}</div>
     </div>
   );
 }
@@ -72,22 +88,41 @@ function PieTooltip({ active, payload }) {
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
 export default function BudgetTracker() {
+  const saved = loadState();
+
   const [activeTab, setActiveTab]           = useState("Dashboard");
-  const [bankBalance, setBankBalance]       = useState("");
+  const [bankBalance, setBankBalance]       = useState(saved?.bankBalance ?? "");
+  const [carryForward, setCarryForward]     = useState(saved?.carryForward ?? "");
   const [editingBalance, setEditingBalance] = useState(false);
   const [tempBalance, setTempBalance]       = useState("");
-  const [incomes, setIncomes]               = useState([mkInc()]);
+  const [editingCarry, setEditingCarry]     = useState(false);
+  const [tempCarry, setTempCarry]           = useState("");
+  const [incomes, setIncomes]               = useState(saved?.incomes ?? [mkInc()]);
   const [editingIncId, setEditingIncId]     = useState(null);
-  const [entries, setEntries]               = useState([]);
+  const [entries, setEntries]               = useState(saved?.entries ?? []);
   const [expForm, setExpForm]               = useState({ ...initScalar, date: today(), note: "" });
   const [formSubs, setFormSubs]             = useState([mkSub()]);
   const [formOthers, setFormOthers]         = useState([mkSub()]);
   const [chartView, setChartView]           = useState("monthly");
   const [notif, setNotif]                   = useState(null);
+  const [darkMode, setDarkMode]             = useState(saved?.darkMode ?? false);
+  const [histSearch, setHistSearch]         = useState("");
+  const [histMonth, setHistMonth]           = useState("");
   const notifTimer = useRef(null);
   const mainRef    = useRef(null);
+  const importRef  = useRef(null);
 
-  // Auto-income notification
+  // ── Persist to localStorage ────────────────────────────────────────────────
+  useEffect(() => {
+    saveState({ bankBalance, carryForward, incomes, entries, darkMode });
+  }, [bankBalance, carryForward, incomes, entries, darkMode]);
+
+  // ── Dark mode on <html> ────────────────────────────────────────────────────
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
+
+  // ── Auto-income notification ───────────────────────────────────────────────
   useEffect(() => {
     const check = () => {
       const td = today();
@@ -113,7 +148,7 @@ export default function BudgetTracker() {
   // ── Derived ──────────────────────────────────────────────────────────────
   const totalIncome   = useMemo(() => incomes.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0), [incomes]);
   const totalExpenses = useMemo(() => entries.reduce((s, e) => s + (e.total || 0), 0), [entries]);
-  const balance       = useMemo(() => (parseFloat(bankBalance) || 0) - totalExpenses, [bankBalance, totalExpenses]);
+  const netBalance    = useMemo(() => (parseFloat(bankBalance) || 0) + (parseFloat(carryForward) || 0) - totalExpenses, [bankBalance, carryForward, totalExpenses]);
 
   const monthEntries  = useMemo(() => { const m = getMon(today()); return entries.filter(e => getMon(e.date) === m); }, [entries]);
   const monthTotal    = useMemo(() => monthEntries.reduce((s, e) => s + e.total, 0), [monthEntries]);
@@ -157,7 +192,7 @@ export default function BudgetTracker() {
 
   const savingsRate = useMemo(() => !totalIncome ? 0 : Math.max(0, Math.round(((totalIncome - monthTotal) / totalIncome) * 100)), [totalIncome, monthTotal]);
   const budgetUsed  = totalIncome > 0 ? Math.min((monthTotal / totalIncome) * 100, 100) : 0;
-  const balColor    = balance >= 0 ? "#047857" : "#b91c1c";
+  const balColor    = netBalance >= 0 ? "var(--green)" : "var(--red)";
 
   const formTotal = useMemo(() => {
     let t = ALL_SCALAR.reduce((s, c) => s + parseFloat(expForm[c.key] || 0), 0);
@@ -166,7 +201,27 @@ export default function BudgetTracker() {
     return t;
   }, [expForm, formSubs, formOthers]);
 
-  // ── Actions ───────────────────────────────────────────────────────────────
+  // ── Filtered history ────────────────────────────────────────────────────────
+  const filteredEntries = useMemo(() => {
+    let list = [...entries].sort((a, b) => b.date.localeCompare(a.date));
+    if (histMonth) list = list.filter(e => getMon(e.date) === histMonth);
+    if (histSearch.trim()) {
+      const q = histSearch.trim().toLowerCase();
+      list = list.filter(e =>
+        e.note?.toLowerCase().includes(q) ||
+        e.date.includes(q) ||
+        ALL_SCALAR.some(c => parseFloat(e[c.key] || 0) > 0 && c.label.toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [entries, histSearch, histMonth]);
+
+  const availableMonths = useMemo(() => {
+    const s = new Set(entries.map(e => getMon(e.date)));
+    return [...s].sort().reverse();
+  }, [entries]);
+
+  // ── Actions ─────────────────────────────────────────────────────────────────
   const addEntry = useCallback(() => {
     if (formTotal === 0) { toast("Enter at least one expense amount", "error"); return; }
     setEntries(prev => [{ ...expForm, subscriptions: formSubs.filter(s => parseFloat(s.amount) > 0), others: formOthers.filter(o => parseFloat(o.amount) > 0), total: formTotal, id: uid() }, ...prev]);
@@ -176,22 +231,60 @@ export default function BudgetTracker() {
     setActiveTab("Dashboard");
   }, [expForm, formSubs, formOthers, formTotal]);
 
-  const delEntry  = (id) => { setEntries(p => p.filter(e => e.id !== id)); toast("Entry deleted"); };
+  const delEntry  = (id) => { if (!confirm("Delete this entry?")) return; setEntries(p => p.filter(e => e.id !== id)); toast("Entry deleted"); };
   const addInc    = () => setIncomes(p => [...p, mkInc()]);
   const updInc    = (id, f, v) => setIncomes(p => p.map(i => i.id === id ? { ...i, [f]: v } : i));
   const remInc    = (id) => setIncomes(p => p.filter(i => i.id !== id));
 
-  // ScalarField and MultiRows are defined OUTSIDE the component (below) to avoid
-  // React treating them as new component types on every render (which would
-  // unmount inputs on each keystroke, killing focus).
+  // ── Export / Import ────────────────────────────────────────────────────────
+  const exportJSON = () => {
+    const data = { bankBalance, carryForward, incomes, entries, exportedAt: new Date().toISOString() };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url  = URL.createObjectURL(blob);
+    const a    = Object.assign(document.createElement("a"), { href: url, download: "budget-backup.json" });
+    a.click(); URL.revokeObjectURL(url);
+    toast("JSON exported");
+  };
 
-  // (metric cards and budget progress are rendered inline below)
+  const exportCSV = () => {
+    const rows = [["Date","Note","Total",...ALL_SCALAR.map(c=>c.label),"Subscriptions","Other"]];
+    entries.forEach(e => {
+      const subs  = (e.subscriptions||[]).reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+      const other = (e.others||[]).reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+      rows.push([e.date, e.note||"", e.total, ...ALL_SCALAR.map(c=>parseFloat(e[c.key]||0)), subs, other]);
+    });
+    const csv  = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url  = URL.createObjectURL(blob);
+    const a    = Object.assign(document.createElement("a"), { href: url, download: "expenses.csv" });
+    a.click(); URL.revokeObjectURL(url);
+    toast("CSV exported");
+  };
+
+  const importJSON = (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!Array.isArray(data.entries)) throw new Error("Invalid format");
+        if (!confirm(`Import ${data.entries.length} entries? This will replace current data.`)) return;
+        setBankBalance(data.bankBalance ?? "");
+        setCarryForward(data.carryForward ?? "");
+        setIncomes(data.incomes ?? [mkInc()]);
+        setEntries(data.entries);
+        toast("Data imported successfully");
+      } catch { toast("Invalid backup file", "error"); }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
 
   // ─────────────────────────────────────────────────────────────────────────
   // Render
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div style={{ fontFamily: "'DM Sans','Segoe UI',sans-serif", background: "#f0f2f5", minHeight: "100vh", paddingBottom: 60 }}>
+    <div style={{ fontFamily: "'DM Sans','Segoe UI',sans-serif", background: "var(--bg)", minHeight: "100vh", paddingBottom: 60, color: "var(--text)" }}>
       <style>{CSS}</style>
 
       {/* Skip link */}
@@ -213,17 +306,25 @@ export default function BudgetTracker() {
                 <p style={S.subtitle}>{new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</p>
               </div>
             </div>
-            <div style={{ display: "flex", gap: 24, alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
               {totalIncome > 0 && (
                 <div style={{ textAlign: "right" }}>
-                  <div style={{ fontSize: 11, color: "#4a5568", fontWeight: 600, marginBottom: 1 }}>Monthly Income</div>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: "#047857", fontFamily: "monospace" }}>{fmt(totalIncome)}</div>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600, marginBottom: 1 }}>Monthly Income</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "var(--green)", fontFamily: "monospace" }}>{fmt(totalIncome)}</div>
                 </div>
               )}
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 11, color: "#4a5568", fontWeight: 600, marginBottom: 1 }}>Net Balance</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: balColor, fontFamily: "monospace" }} aria-label={`Net balance: ${fmt(balance)}`}>{fmt(balance)}</div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600, marginBottom: 1 }}>Net Balance</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: balColor, fontFamily: "monospace" }} aria-label={`Net balance: ${fmt(netBalance)}`}>{fmt(netBalance)}</div>
               </div>
+              <button
+                onClick={() => setDarkMode(d => !d)}
+                className="btn-sm"
+                style={{ fontSize: 18, padding: "6px 12px", minHeight: 40, border: "1px solid var(--border)" }}
+                aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+              >
+                {darkMode ? "☀️" : "🌙"}
+              </button>
             </div>
           </div>
           <nav aria-label="Main navigation">
@@ -246,7 +347,6 @@ export default function BudgetTracker() {
         {/* ══════════ DASHBOARD ══════════ */}
         {activeTab === "Dashboard" && (
           <div role="tabpanel" id="panel-Dashboard" aria-labelledby="tab-Dashboard">
-            {/* Desktop: sidebar-left + charts-right. Mobile: single column */}
             <div className="dash-layout">
 
               {/* ── LEFT SIDEBAR ── */}
@@ -255,7 +355,9 @@ export default function BudgetTracker() {
                 {/* Account Setup */}
                 <section aria-labelledby="setup-h" className="card">
                   <h2 id="setup-h" className="section-title">Account Setup</h2>
-                  <div style={{ marginBottom: 16 }}>
+
+                  {/* Bank Balance */}
+                  <div style={{ marginBottom: 14 }}>
                     <label htmlFor="bank-bal" style={S.label}>Bank Balance (₹)</label>
                     {editingBalance ? (
                       <div style={{ display: "flex", gap: 8 }}>
@@ -266,8 +368,26 @@ export default function BudgetTracker() {
                       </div>
                     ) : (
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <div style={S.displayBox}>{bankBalance ? fmt(bankBalance) : <span style={{ color: "#9ca3af", fontStyle: "italic", fontWeight: 500 }}>Not set</span>}</div>
+                        <div style={S.displayBox}>{bankBalance ? fmt(bankBalance) : <span style={{ color: "var(--text-muted)", fontStyle: "italic", fontWeight: 500 }}>Not set</span>}</div>
                         <button className="btn-sm" onClick={() => { setTempBalance(bankBalance); setEditingBalance(true); }} aria-label="Edit bank balance">Edit</button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Carry-forward */}
+                  <div style={{ marginBottom: 16 }}>
+                    <label htmlFor="carry-fwd" style={S.label}>Carry-forward Balance (₹)</label>
+                    {editingCarry ? (
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <input id="carry-fwd" className="inp" type="number" min="0" value={tempCarry}
+                          onChange={e => setTempCarry(e.target.value)} placeholder="0" autoFocus />
+                        <button className="btn-primary" style={{ whiteSpace: "nowrap", padding: "9px 16px" }}
+                          onClick={() => { setCarryForward(tempCarry); setEditingCarry(false); toast("Carry-forward updated"); }}>Save</button>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <div style={S.displayBox}>{carryForward ? fmt(carryForward) : <span style={{ color: "var(--text-muted)", fontStyle: "italic", fontWeight: 500 }}>Not set</span>}</div>
+                        <button className="btn-sm" onClick={() => { setTempCarry(carryForward); setEditingCarry(true); }} aria-label="Edit carry-forward balance">Edit</button>
                       </div>
                     )}
                   </div>
@@ -287,7 +407,7 @@ export default function BudgetTracker() {
                   ))}
                   {incomes.length > 1 && (
                     <div style={S.incTotal}>
-                      <span style={{ color: "#4a5568", fontWeight: 600, fontSize: 13 }}>Total Monthly Income</span>
+                      <span style={{ color: "var(--text-muted)", fontWeight: 600, fontSize: 13 }}>Total Monthly Income</span>
                       <span style={{ color: "#4f46e5", fontWeight: 700, fontFamily: "monospace", fontSize: 15 }}>{fmt(totalIncome)}</span>
                     </div>
                   )}
@@ -298,15 +418,15 @@ export default function BudgetTracker() {
                   <h2 id="metrics-h" className="sr-only">Key Metrics</h2>
                   <div className="metrics-grid">
                     {[
-                      { label: "Bank Balance", val: fmt(parseFloat(bankBalance) || 0), sub: "Current balance",          color: "#4f46e5" },
-                      { label: "This Month",   val: fmt(monthTotal),                   sub: `${monthEntries.length} entries`, color: "#b91c1c" },
-                      { label: "This Week",    val: fmt(weekTotal),                    sub: `${weekEntries.length} entries`,  color: "#b45309" },
-                      { label: "Money Left",   val: fmt(balance),                      sub: "After all expenses",       color: balColor   },
+                      { label: "Bank Balance",    val: fmt(parseFloat(bankBalance) || 0),                       sub: "Current balance",          color: "#4f46e5" },
+                      { label: "This Month",       val: fmt(monthTotal),                                         sub: `${monthEntries.length} entries`, color: "var(--red)" },
+                      { label: "This Week",        val: fmt(weekTotal),                                          sub: `${weekEntries.length} entries`,  color: "#b45309" },
+                      { label: "Money Left",       val: fmt(netBalance),                                         sub: "After all expenses",       color: balColor   },
                     ].map(m => (
                       <div key={m.label} className="metric-card" role="figure" aria-label={`${m.label}: ${m.val}`}>
-                        <div style={{ fontSize: 12, color: "#4a5568", fontWeight: 600, marginBottom: 6 }}>{m.label}</div>
+                        <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600, marginBottom: 6 }}>{m.label}</div>
                         <div style={{ fontSize: 20, fontWeight: 700, color: m.color, fontFamily: "monospace", letterSpacing: "-0.5px" }}>{m.val}</div>
-                        <div style={{ fontSize: 12, color: "#4a5568", marginTop: 4 }}>{m.sub}</div>
+                        <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{m.sub}</div>
                       </div>
                     ))}
                   </div>
@@ -317,20 +437,20 @@ export default function BudgetTracker() {
                   <section aria-labelledby="budget-h" className="card">
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                       <h2 id="budget-h" className="section-title" style={{ margin: 0 }}>Monthly Budget</h2>
-                      <span style={{ fontSize: 15, fontWeight: 700, color: budgetUsed > 80 ? "#b91c1c" : budgetUsed > 60 ? "#b45309" : "#047857" }}>{Math.round(budgetUsed)}%</span>
+                      <span style={{ fontSize: 15, fontWeight: 700, color: budgetUsed > 80 ? "var(--red)" : budgetUsed > 60 ? "#b45309" : "var(--green)" }}>{Math.round(budgetUsed)}%</span>
                     </div>
                     <div className="progress-bar" role="progressbar" aria-valuenow={Math.round(budgetUsed)} aria-valuemin={0} aria-valuemax={100}>
-                      <div className="progress-fill" style={{ width: `${budgetUsed}%`, background: budgetUsed > 80 ? "#b91c1c" : budgetUsed > 60 ? "#b45309" : "#047857" }} />
+                      <div className="progress-fill" style={{ width: `${budgetUsed}%`, background: budgetUsed > 80 ? "var(--red)" : budgetUsed > 60 ? "#b45309" : "var(--green)" }} />
                     </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 12, color: "#4a5568", fontWeight: 600, flexWrap: "wrap", gap: 4 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 12, color: "var(--text-muted)", fontWeight: 600, flexWrap: "wrap", gap: 4 }}>
                       <span>Spent: {fmt(monthTotal)}</span>
                       <span>Left: {fmt(Math.max(0, totalIncome - monthTotal))}</span>
                       <span>Income: {fmt(totalIncome)}</span>
                     </div>
                     {savingsRate > 0 && (
-                      <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: "rgba(4,120,87,0.08)", display: "flex", gap: 8, alignItems: "center" }}>
+                      <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: "rgba(4,120,87,0.1)", display: "flex", gap: 8, alignItems: "center" }}>
                         <span aria-hidden="true" style={{ fontSize: 18 }}>💰</span>
-                        <span style={{ fontSize: 13, color: "#047857", fontWeight: 700 }}>Savings Rate: {savingsRate}% — {savingsRate >= 20 ? "Great job!" : "Aim for 20%+"}</span>
+                        <span style={{ fontSize: 13, color: "var(--green)", fontWeight: 700 }}>Savings Rate: {savingsRate}% — {savingsRate >= 20 ? "Great job!" : "Aim for 20%+"}</span>
                       </div>
                     )}
                   </section>
@@ -345,11 +465,11 @@ export default function BudgetTracker() {
                         <li key={d.key} className="insight-row">
                           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                             <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: "50%", background: d.fill, flexShrink: 0, display: "inline-block" }} />
-                            <span style={{ fontSize: 13, color: "#1a202c", fontWeight: 600 }}>{d.label}</span>
+                            <span style={{ fontSize: 13, color: "var(--text)", fontWeight: 600 }}>{d.label}</span>
                           </div>
                           <div style={{ textAlign: "right" }}>
-                            <div style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color: "#1a202c" }}>{fmt(d.value)}</div>
-                            {totalIncome > 0 && <div style={{ fontSize: 11, color: "#4a5568", fontWeight: 600 }}>{Math.round((d.value / totalIncome) * 100)}%</div>}
+                            <div style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color: "var(--text)" }}>{fmt(d.value)}</div>
+                            {totalIncome > 0 && <div style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600 }}>{Math.round((d.value / totalIncome) * 100)}%</div>}
                           </div>
                         </li>
                       ))}
@@ -376,10 +496,10 @@ export default function BudgetTracker() {
                   {chartData.length > 0 ? (
                     <ResponsiveContainer width="100%" height={240}>
                       <BarChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -8 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                        <XAxis dataKey="label" tick={{ fontSize: 12, fill: "#4a5568" }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fontSize: 12, fill: "#4a5568" }} axisLine={false} tickLine={false} tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} />
-                        <Tooltip formatter={v => [fmt(v), "Spent"]} contentStyle={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 13 }} wrapperStyle={{ zIndex: 9999 }} cursor={{ fill: "rgba(99,102,241,0.06)" }} />
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                        <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fontSize: 12, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} />
+                        <Tooltip formatter={v => [fmt(v), "Spent"]} contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 13, color: "var(--text)" }} wrapperStyle={{ zIndex: 9999 }} cursor={{ fill: "rgba(99,102,241,0.06)" }} />
                         <Bar dataKey="amount" fill="#6366f1" radius={[4, 4, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
@@ -398,7 +518,7 @@ export default function BudgetTracker() {
                           {pieData.map((d, i) => <Cell key={i} fill={d.fill} />)}
                         </Pie>
                         <Tooltip content={<PieTooltip />} wrapperStyle={{ zIndex: 9999 }} />
-                        <Legend formatter={val => <span style={{ fontSize: 12, color: "#4a5568", fontWeight: 600 }}>{val}</span>} wrapperStyle={{ paddingTop: 8 }} />
+                        <Legend formatter={val => <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>{val}</span>} wrapperStyle={{ paddingTop: 8 }} />
                       </PieChart>
                     </ResponsiveContainer>
                   </section>
@@ -453,34 +573,33 @@ export default function BudgetTracker() {
               {/* Sticky sidebar: total + save */}
               <div className="entry-sidebar">
                 <div className="card entry-summary-card">
-                  <h3 style={{ margin: "0 0 16px", fontSize: 13, fontWeight: 700, color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.07em" }}>Entry Summary</h3>
+                  <h3 style={{ margin: "0 0 16px", fontSize: 13, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>Entry Summary</h3>
 
-                  {/* Mini breakdown */}
                   {ALL_SCALAR.map(c => {
                     const v = parseFloat(expForm[c.key] || 0);
                     if (!v) return null;
                     return (
                       <div key={c.key} style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13 }}>
-                        <span style={{ color: "#4a5568", fontWeight: 600 }}>{c.icon} {c.label}</span>
-                        <span style={{ fontWeight: 700, fontFamily: "monospace", color: "#1a202c" }}>{fmt(v)}</span>
+                        <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>{c.icon} {c.label}</span>
+                        <span style={{ fontWeight: 700, fontFamily: "monospace", color: "var(--text)" }}>{fmt(v)}</span>
                       </div>
                     );
                   })}
                   {formSubs.filter(s => parseFloat(s.amount) > 0).map((s, i) => (
                     <div key={i} style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13 }}>
-                      <span style={{ color: "#4a5568", fontWeight: 600 }}>📱 {s.name || `Sub ${i + 1}`}</span>
-                      <span style={{ fontWeight: 700, fontFamily: "monospace", color: "#1a202c" }}>{fmt(s.amount)}</span>
+                      <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>📱 {s.name || `Sub ${i + 1}`}</span>
+                      <span style={{ fontWeight: 700, fontFamily: "monospace", color: "var(--text)" }}>{fmt(s.amount)}</span>
                     </div>
                   ))}
                   {formOthers.filter(o => parseFloat(o.amount) > 0).map((o, i) => (
                     <div key={i} style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13 }}>
-                      <span style={{ color: "#4a5568", fontWeight: 600 }}>📦 {o.name || `Other ${i + 1}`}</span>
-                      <span style={{ fontWeight: 700, fontFamily: "monospace", color: "#1a202c" }}>{fmt(o.amount)}</span>
+                      <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>📦 {o.name || `Other ${i + 1}`}</span>
+                      <span style={{ fontWeight: 700, fontFamily: "monospace", color: "var(--text)" }}>{fmt(o.amount)}</span>
                     </div>
                   ))}
 
-                  <div style={{ borderTop: "2px solid #e2e8f0", marginTop: 12, paddingTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: "#4a5568" }}>Total</span>
+                  <div style={{ borderTop: "2px solid var(--border)", marginTop: 12, paddingTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text-muted)" }}>Total</span>
                     <span style={{ fontSize: 24, fontWeight: 700, color: "#4f46e5", fontFamily: "monospace" }}>{fmt(formTotal)}</span>
                   </div>
 
@@ -497,19 +616,54 @@ export default function BudgetTracker() {
         {/* ══════════ HISTORY ══════════ */}
         {activeTab === "History" && (
           <div role="tabpanel" id="panel-History" aria-labelledby="tab-History">
-            {entries.length === 0 ? (
+            {/* Toolbar */}
+            <div className="card" style={{ marginBottom: 12, padding: "14px 18px" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                <input
+                  className="inp"
+                  type="search"
+                  placeholder="🔍 Search entries…"
+                  value={histSearch}
+                  onChange={e => setHistSearch(e.target.value)}
+                  style={{ flex: "1 1 200px", maxWidth: 320 }}
+                  aria-label="Search history"
+                />
+                <select
+                  className="inp"
+                  value={histMonth}
+                  onChange={e => setHistMonth(e.target.value)}
+                  style={{ flex: "0 0 auto", width: 160 }}
+                  aria-label="Filter by month"
+                >
+                  <option value="">All months</option>
+                  {availableMonths.map(m => (
+                    <option key={m} value={m}>{new Date(m + "-01").toLocaleDateString("en-IN", { month: "long", year: "numeric" })}</option>
+                  ))}
+                </select>
+                <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                  <button className="btn-sm" onClick={exportCSV} title="Export as CSV" style={{ minHeight: 36 }}>📥 CSV</button>
+                  <button className="btn-sm" onClick={exportJSON} title="Export as JSON" style={{ minHeight: 36 }}>📦 JSON</button>
+                  <button className="btn-sm" onClick={() => importRef.current?.click()} title="Import JSON" style={{ minHeight: 36 }}>📤 Import</button>
+                  <input ref={importRef} type="file" accept=".json" onChange={importJSON} style={{ display: "none" }} />
+                </div>
+              </div>
+            </div>
+
+            {filteredEntries.length === 0 ? (
               <div className="card" style={{ textAlign: "center", padding: 64 }}>
                 <div aria-hidden="true" style={{ fontSize: 48, marginBottom: 16 }}>📋</div>
-                <p style={{ color: "#4a5568", margin: 0, fontWeight: 600, fontSize: 16 }}>No entries yet. Add your first expense!</p>
+                <p style={{ color: "var(--text-muted)", margin: 0, fontWeight: 600, fontSize: 16 }}>
+                  {entries.length === 0 ? "No entries yet. Add your first expense!" : "No entries match your search."}
+                </p>
               </div>
             ) : (
               <>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                  <h2 className="section-title" style={{ margin: 0 }}>{entries.length} {entries.length === 1 ? "entry" : "entries"}</h2>
-                  <span style={{ fontSize: 14, color: "#4a5568", fontWeight: 700 }}>Grand total: {fmt(totalExpenses)}</span>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 700 }}>{filteredEntries.length} {filteredEntries.length === 1 ? "entry" : "entries"}</span>
+                  <span style={{ fontSize: 14, color: "var(--text-muted)", fontWeight: 700 }}>Total: {fmt(filteredEntries.reduce((s,e)=>s+e.total,0))}</span>
                 </div>
                 <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-                  {entries.map(e => {
+                  {filteredEntries.map(e => {
                     const scCats = ALL_SCALAR.filter(c => parseFloat(e[c.key] || 0) > 0);
                     const subs   = (e.subscriptions || []).filter(s => parseFloat(s.amount) > 0);
                     const others = (e.others || []).filter(o => parseFloat(o.amount) > 0);
@@ -523,21 +677,21 @@ export default function BudgetTracker() {
                       <li key={e.id} className="history-item" aria-label={`Entry ${ds}, ${fmt(e.total)}`}>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
-                            <time dateTime={e.date} style={{ fontSize: 13, color: "#4a5568", fontWeight: 700 }}>{ds}</time>
-                            {e.note && <span style={{ fontSize: 13, color: "#4a5568", fontStyle: "italic" }}>— {e.note}</span>}
+                            <time dateTime={e.date} style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 700 }}>{ds}</time>
+                            {e.note && <span style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic" }}>— {e.note}</span>}
                           </div>
                           <div style={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
                             {pills.slice(0, 6).map((p, i) => (
-                              <span key={i} className="cat-pill" style={{ background: "#f0f2f5", color: "#1a202c", borderLeft: `3px solid ${p.fill}` }}>
+                              <span key={i} className="cat-pill" style={{ background: "var(--pill-bg)", color: "var(--text)", borderLeft: `3px solid ${p.fill}` }}>
                                 {p.icon} {p.label}: {fmt(p.val)}
                               </span>
                             ))}
-                            {pills.length > 6 && <span className="cat-pill" style={{ background: "#e2e8f0", color: "#4a5568" }}>+{pills.length - 6} more</span>}
+                            {pills.length > 6 && <span className="cat-pill" style={{ background: "var(--border)", color: "var(--text-muted)" }}>+{pills.length - 6} more</span>}
                           </div>
                         </div>
                         <div style={{ textAlign: "right", marginLeft: 16, flexShrink: 0 }}>
-                          <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: "#1a202c" }}>{fmt(e.total)}</div>
-                          <button className="btn-sm" style={{ marginTop: 8, color: "#b91c1c", borderColor: "#b91c1c40", minHeight: 36 }}
+                          <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: "var(--text)" }}>{fmt(e.total)}</div>
+                          <button className="btn-sm" style={{ marginTop: 8, color: "var(--red)", borderColor: "rgba(185,28,28,0.25)", minHeight: 36 }}
                             onClick={() => delEntry(e.id)} aria-label={`Delete entry from ${ds}`}>Delete</button>
                         </div>
                       </li>
@@ -559,12 +713,12 @@ export default function BudgetTracker() {
               <div className="analytics-stats">
                 {[
                   { label: "Avg Monthly Spend", val: entries.length > 0 ? fmt(totalExpenses / Math.max(1, new Set(entries.map(e => getMon(e.date))).size)) : "—", color: "#4f46e5" },
-                  { label: "Savings Rate",       val: `${savingsRate}%`,    color: savingsRate >= 20 ? "#047857" : "#b45309" },
-                  { label: "Peak Day Spend",     val: chartData.length > 0 ? fmt(Math.max(...chartData.map(d => d.amount))) : "—", color: "#b91c1c" },
-                  { label: "Total Entries",      val: String(entries.length), color: "#1a202c" },
+                  { label: "Savings Rate",       val: `${savingsRate}%`,    color: savingsRate >= 20 ? "var(--green)" : "#b45309" },
+                  { label: "Peak Day Spend",     val: chartView === "daily" && chartData.length > 0 ? fmt(Math.max(...chartData.map(d => d.amount))) : chartData.length > 0 ? fmt(Math.max(...chartData.map(d => d.amount))) : "—", color: "var(--red)" },
+                  { label: "Total Entries",      val: String(entries.length), color: "var(--text)" },
                 ].map(m => (
                   <div key={m.label} className="metric-card">
-                    <div style={{ fontSize: 12, color: "#4a5568", fontWeight: 600, marginBottom: 8 }}>{m.label}</div>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600, marginBottom: 8 }}>{m.label}</div>
                     <div style={{ fontSize: 22, fontWeight: 700, color: m.color, fontFamily: "monospace" }}>{m.val}</div>
                   </div>
                 ))}
@@ -583,9 +737,9 @@ export default function BudgetTracker() {
                   return (
                     <div key={c.key} style={{ marginBottom: 14 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-                        <span style={{ fontSize: 13, color: "#1a202c", fontWeight: 600 }}>{c.icon} {c.label}</span>
+                        <span style={{ fontSize: 13, color: "var(--text)", fontWeight: 600 }}>{c.icon} {c.label}</span>
                         <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "monospace", color: c.color }}>
-                          {fmt(val)} <span style={{ fontWeight: 600, color: "#4a5568", fontSize: 12 }}>({Math.round(pct)}%)</span>
+                          {fmt(val)} <span style={{ fontWeight: 600, color: "var(--text-muted)", fontSize: 12 }}>({Math.round(pct)}%)</span>
                         </span>
                       </div>
                       <div className="progress-bar" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100} aria-label={`${c.label}: ${Math.round(pct)}%`}>
@@ -594,7 +748,7 @@ export default function BudgetTracker() {
                     </div>
                   );
                 })}
-                {totalExpenses === 0 && <p style={{ color: "#4a5568", fontSize: 14, textAlign: "center", padding: 20, fontWeight: 600 }}>No spending data yet.</p>}
+                {totalExpenses === 0 && <p style={{ color: "var(--text-muted)", fontSize: 14, textAlign: "center", padding: 20, fontWeight: 600 }}>No spending data yet.</p>}
               </section>
 
               {/* Right: charts + health */}
@@ -607,10 +761,10 @@ export default function BudgetTracker() {
                   {chartData.length > 1 ? (
                     <ResponsiveContainer width="100%" height={240}>
                       <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -8 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                        <XAxis dataKey="label" tick={{ fontSize: 12, fill: "#4a5568" }} axisLine={false} tickLine={false} />
-                        <YAxis tick={{ fontSize: 12, fill: "#4a5568" }} axisLine={false} tickLine={false} tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} />
-                        <Tooltip formatter={v => [fmt(v), "Spent"]} contentStyle={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 13 }} wrapperStyle={{ zIndex: 9999 }} />
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                        <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} />
+                        <YAxis tick={{ fontSize: 12, fill: "var(--text-muted)" }} axisLine={false} tickLine={false} tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} />
+                        <Tooltip formatter={v => [fmt(v), "Spent"]} contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 13, color: "var(--text)" }} wrapperStyle={{ zIndex: 9999 }} />
                         <Line type="monotone" dataKey="amount" stroke="#6366f1" strokeWidth={2.5} dot={{ fill: "#6366f1", r: 4 }} activeDot={{ r: 6 }} />
                       </LineChart>
                     </ResponsiveContainer>
@@ -628,7 +782,7 @@ export default function BudgetTracker() {
                           {pieData.map((d, i) => <Cell key={i} fill={d.fill} />)}
                         </Pie>
                         <Tooltip content={<PieTooltip />} wrapperStyle={{ zIndex: 9999 }} />
-                        <Legend formatter={val => <span style={{ fontSize: 12, color: "#4a5568", fontWeight: 600 }}>{val}</span>} wrapperStyle={{ paddingTop: 8 }} />
+                        <Legend formatter={val => <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>{val}</span>} wrapperStyle={{ paddingTop: 8 }} />
                       </PieChart>
                     </ResponsiveContainer>
                   </section>
@@ -639,18 +793,18 @@ export default function BudgetTracker() {
                     <h2 id="health-h" className="section-title">Financial Health</h2>
                     <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
                       {[
-                        { label: "Savings Rate",            val: savingsRate, t: 20, unit: "%", tip: "Target ≥ 20%" },
-                        { label: "Housing % of income",     val: Math.round((catTotals.rent / totalIncome) * 100), t: 30, unit: "%", tip: "Target ≤ 30%", inv: true },
-                        { label: "Debt (EMI + Credit Card)",val: Math.round(((catTotals.loanEmi + catTotals.creditCard) / totalIncome) * 100), t: 20, unit: "%", tip: "Target ≤ 20%", inv: true },
+                        { label: "Savings Rate",             val: savingsRate, t: 20, unit: "%", tip: "Target ≥ 20%" },
+                        { label: "Housing % of income",      val: Math.round((catTotals.rent / totalIncome) * 100), t: 30, unit: "%", tip: "Target ≤ 30%", inv: true },
+                        { label: "Debt (EMI + Credit Card)", val: Math.round(((catTotals.loanEmi + catTotals.creditCard) / totalIncome) * 100), t: 20, unit: "%", tip: "Target ≤ 20%", inv: true },
                       ].map(item => {
                         const pass = item.inv ? item.val <= item.t : item.val >= item.t;
                         return (
                           <li key={item.label} className="insight-row">
                             <div>
-                              <div style={{ fontSize: 13, fontWeight: 700, color: "#1a202c" }}>{item.label}</div>
-                              <div style={{ fontSize: 12, color: "#4a5568", fontWeight: 600 }}>{item.tip}</div>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{item.label}</div>
+                              <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>{item.tip}</div>
                             </div>
-                            <span style={{ fontSize: 18, fontWeight: 700, color: pass ? "#047857" : item.inv ? "#b91c1c" : "#b45309" }}>
+                            <span style={{ fontSize: 18, fontWeight: 700, color: pass ? "var(--green)" : item.inv ? "var(--red)" : "#b45309" }}>
                               {item.val}{item.unit}
                             </span>
                           </li>
@@ -752,7 +906,7 @@ function ChartToggle({ value, onChange }) {
 function EntrySection({ title, color, children }) {
   return (
     <fieldset style={{ marginBottom: 20, borderRadius: 10, border: `2px solid ${color}28`, padding: 0, overflow: "hidden" }}>
-      <legend style={{ background: color + "12", padding: "8px 14px", margin: 0, width: "100%", display: "block", borderBottom: `1px solid ${color}22`, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: "#1a202c", boxSizing: "border-box" }}>
+      <legend style={{ background: color + "12", padding: "8px 14px", margin: 0, width: "100%", display: "block", borderBottom: `1px solid ${color}22`, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: "var(--text)", boxSizing: "border-box" }}>
         <span aria-hidden="true" style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%", background: color, marginRight: 7, verticalAlign: "middle" }} />
         {title}
       </legend>
@@ -762,10 +916,10 @@ function EntrySection({ title, color, children }) {
 }
 
 function IncomeRow({ inc, index, editing, onEdit, onSave, onChange, onRemove, showRemove }) {
-  const ac = inc.auto ? "#047857" : "#b45309";
+  const ac  = inc.auto ? "var(--green)" : "#b45309";
   const tid = `tog-${inc.id}`;
   return (
-    <div style={{ background: "#f8f9fa", borderRadius: 10, padding: "12px 14px", marginBottom: 8, border: "1px solid #e2e8f0" }}>
+    <div style={{ background: "var(--input-bg)", borderRadius: 10, padding: "12px 14px", marginBottom: 8, border: "1px solid var(--border)" }}>
       {editing ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -777,7 +931,7 @@ function IncomeRow({ inc, index, editing, onEdit, onSave, onChange, onRemove, sh
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <button id={tid} role="switch" aria-checked={inc.auto} onClick={() => onChange("auto", !inc.auto)} aria-label={`Auto-add income ${index}`}
-              style={{ width: 44, height: 26, borderRadius: 13, background: inc.auto ? "#047857" : "#cbd5e0", border: "none", cursor: "pointer", position: "relative", transition: "background .2s", padding: 0, flexShrink: 0 }}>
+              style={{ width: 44, height: 26, borderRadius: 13, background: inc.auto ? "var(--green)" : "var(--border)", border: "none", cursor: "pointer", position: "relative", transition: "background .2s", padding: 0, flexShrink: 0 }}>
               <span style={{ position: "absolute", top: 4, left: inc.auto ? 21 : 3, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left .2s", boxShadow: "0 1px 3px rgba(0,0,0,.25)" }} />
             </button>
             <label htmlFor={tid} style={{ fontSize: 13, color: ac, fontWeight: 700, cursor: "pointer" }}>
@@ -785,16 +939,16 @@ function IncomeRow({ inc, index, editing, onEdit, onSave, onChange, onRemove, sh
             </label>
             <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
               <button className="btn-primary" style={{ padding: "8px 18px", fontSize: 13, minHeight: 36 }} onClick={onSave}>Save</button>
-              {showRemove && <button className="btn-sm" style={{ color: "#b91c1c", borderColor: "#b91c1c40", minHeight: 36 }} onClick={onRemove} aria-label={`Remove income ${index}`}>Remove</button>}
+              {showRemove && <button className="btn-sm" style={{ color: "var(--red)", borderColor: "rgba(185,28,28,0.25)", minHeight: 36 }} onClick={onRemove} aria-label={`Remove income ${index}`}>Remove</button>}
             </div>
           </div>
         </div>
       ) : (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#1a202c" }}>{inc.type}</span>
-            <span style={{ fontSize: 16, fontWeight: 700, color: "#4f46e5", fontFamily: "monospace" }}>{inc.amount ? fmt(inc.amount) : <span style={{ color: "#9ca3af", fontStyle: "italic", fontWeight: 500, fontSize: 13 }}>not set</span>}</span>
-            {inc.date && <span style={{ fontSize: 12, color: "#4a5568", fontWeight: 600 }}>every {new Date(inc.date).getDate()}{ordinal(new Date(inc.date).getDate())}</span>}
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{inc.type}</span>
+            <span style={{ fontSize: 16, fontWeight: 700, color: "#4f46e5", fontFamily: "monospace" }}>{inc.amount ? fmt(inc.amount) : <span style={{ color: "var(--text-muted)", fontStyle: "italic", fontWeight: 500, fontSize: 13 }}>not set</span>}</span>
+            {inc.date && <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>every {new Date(inc.date).getDate()}{ordinal(new Date(inc.date).getDate())}</span>}
             <span style={{ fontSize: 12, fontWeight: 700, color: ac }}>{inc.auto ? "🔄 Auto" : "✋ Manual"}</span>
           </div>
           <button className="btn-sm" onClick={onEdit} style={{ minHeight: 36 }} aria-label={`Edit income ${index}`}>Edit</button>
@@ -813,21 +967,21 @@ function ordinal(n) {
 // Styles
 // ─────────────────────────────────────────────────────────────────────────────
 const S = {
-  header:   { background: "#fff", borderBottom: "1px solid #e2e8f0", padding: "18px 24px 0", position: "sticky", top: 0, zIndex: 200 },
-  hInner:   { maxWidth: 1400, margin: "0 auto" },
-  body:     { maxWidth: 1400, margin: "24px auto", padding: "0 24px", outline: "none" },
-  title:    { margin: 0, fontSize: 22, fontWeight: 700, color: "#1a202c", letterSpacing: "-0.5px" },
-  subtitle: { margin: "2px 0 0", fontSize: 13, color: "#4a5568", fontWeight: 600 },
-  label:    { fontSize: 13, color: "#4a5568", fontWeight: 700, display: "block", marginBottom: 6 },
-  displayBox: { flex: 1, padding: "10px 14px", borderRadius: 8, background: "#f8f9fa", fontSize: 15, fontWeight: 700, color: "#1a202c", fontFamily: "monospace", border: "1px solid #e2e8f0" },
-  fieldWrap: { display: "flex", flexDirection: "column" },
-  amtRow:   { display: "flex", alignItems: "center", border: "1px solid #e2e8f0", borderRadius: 8, background: "#f8f9fa", overflow: "hidden" },
-  rupee:    { padding: "0 8px", fontSize: 15, color: "#4f46e5", fontWeight: 700, userSelect: "none" },
-  amtInp:   { flex: 1, border: "none", background: "transparent", padding: "10px 8px 10px 0", fontSize: 14, outline: "none", color: "#1a202c", minWidth: 0 },
+  header:     { background: "var(--header-bg)", borderBottom: "1px solid var(--border)", padding: "18px 24px 0", position: "sticky", top: 0, zIndex: 200 },
+  hInner:     { maxWidth: 1400, margin: "0 auto" },
+  body:       { maxWidth: 1400, margin: "24px auto", padding: "0 24px", outline: "none" },
+  title:      { margin: 0, fontSize: 22, fontWeight: 700, color: "var(--text)", letterSpacing: "-0.5px" },
+  subtitle:   { margin: "2px 0 0", fontSize: 13, color: "var(--text-muted)", fontWeight: 600 },
+  label:      { fontSize: 13, color: "var(--text-muted)", fontWeight: 700, display: "block", marginBottom: 6 },
+  displayBox: { flex: 1, padding: "10px 14px", borderRadius: 8, background: "var(--input-bg)", fontSize: 15, fontWeight: 700, color: "var(--text)", fontFamily: "monospace", border: "1px solid var(--border)" },
+  fieldWrap:  { display: "flex", flexDirection: "column" },
+  amtRow:     { display: "flex", alignItems: "center", border: "1px solid var(--border)", borderRadius: 8, background: "var(--input-bg)", overflow: "hidden" },
+  rupee:      { padding: "0 8px", fontSize: 15, color: "#4f46e5", fontWeight: 700, userSelect: "none" },
+  amtInp:     { flex: 1, border: "none", background: "transparent", padding: "10px 8px 10px 0", fontSize: 14, outline: "none", color: "var(--text)", minWidth: 0 },
   addMoreBtn: { fontSize: 13, color: "#4f46e5", background: "none", border: "1.5px dashed #4f46e5", borderRadius: 6, padding: "6px 14px", cursor: "pointer", marginTop: 4, fontWeight: 700, minHeight: 36 },
-  rmBtn:    { background: "none", border: "1px solid #e2e8f0", borderRadius: 6, cursor: "pointer", fontSize: 13, padding: "6px 10px", color: "#b91c1c", minHeight: 36, fontWeight: 700 },
-  incTotal: { marginTop: 10, padding: "10px 14px", borderRadius: 8, background: "rgba(79,70,229,0.06)", border: "1px solid rgba(79,70,229,0.15)", display: "flex", justifyContent: "space-between", alignItems: "center" },
-  empty:    { height: 200, display: "flex", alignItems: "center", justifyContent: "center", color: "#4a5568", fontSize: 14, fontWeight: 600, textAlign: "center" },
+  rmBtn:      { background: "none", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer", fontSize: 13, padding: "6px 10px", color: "var(--red)", minHeight: 36, fontWeight: 700 },
+  incTotal:   { marginTop: 10, padding: "10px 14px", borderRadius: 8, background: "rgba(79,70,229,0.06)", border: "1px solid rgba(79,70,229,0.15)", display: "flex", justifyContent: "space-between", alignItems: "center" },
+  empty:      { height: 200, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 14, fontWeight: 600, textAlign: "center" },
 };
 
 const CSS = `
@@ -835,34 +989,61 @@ const CSS = `
   *, *::before, *::after { box-sizing: border-box; }
   body { margin: 0; }
 
+  /* ── Theme tokens ── */
+  :root, [data-theme="light"] {
+    --bg:         #f0f2f5;
+    --card:       #ffffff;
+    --header-bg:  #ffffff;
+    --border:     #e2e8f0;
+    --text:       #1a202c;
+    --text-muted: #4a5568;
+    --input-bg:   #f8f9fa;
+    --pill-bg:    #f0f2f5;
+    --green:      #047857;
+    --red:        #b91c1c;
+  }
+  [data-theme="dark"] {
+    --bg:         #0f1117;
+    --card:       #1a1d27;
+    --header-bg:  #13151f;
+    --border:     #2d3148;
+    --text:       #e2e8f0;
+    --text-muted: #8896b3;
+    --input-bg:   #1e2133;
+    --pill-bg:    #1e2133;
+    --green:      #10b981;
+    --red:        #f87171;
+  }
+
   .skip-link { position: absolute; top: -100%; left: 8px; padding: 10px 18px; background: #4f46e5; color: #fff; font-weight: 700; font-size: 14px; border-radius: 0 0 8px 8px; text-decoration: none; z-index: 9999; transition: top .15s; }
   .skip-link:focus { top: 0; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
   /* ── Tabs ── */
-  .tab-btn { padding: 10px 22px; border-radius: 20px; border: none; cursor: pointer; font-size: 14px; font-weight: 700; transition: all .2s; background: transparent; color: #4a5568; min-height: 42px; font-family: inherit; }
+  .tab-btn { padding: 10px 22px; border-radius: 20px; border: none; cursor: pointer; font-size: 14px; font-weight: 700; transition: all .2s; background: transparent; color: var(--text-muted); min-height: 42px; font-family: inherit; }
   .tab-btn.active { background: #4f46e5; color: #fff; }
-  .tab-btn:hover:not(.active) { background: #eef2ff; color: #1a202c; }
+  .tab-btn:hover:not(.active) { background: rgba(99,102,241,0.1); color: var(--text); }
   .tab-btn:focus-visible { outline: 3px solid #4f46e5; outline-offset: 2px; }
 
   /* ── Cards ── */
-  .card { background: #fff; border-radius: 16px; border: 1px solid #e2e8f0; padding: 22px; }
-  .metric-card { background: #fff; border-radius: 12px; padding: 20px; border: 1px solid #e2e8f0; }
+  .card { background: var(--card); border-radius: 16px; border: 1px solid var(--border); padding: 22px; }
+  .metric-card { background: var(--card); border-radius: 12px; padding: 20px; border: 1px solid var(--border); }
 
   /* ── Inputs ── */
-  .inp { width: 100%; padding: 10px 13px; border-radius: 8px; border: 1px solid #e2e8f0; font-size: 14px; background: #f8f9fa; color: #1a202c; box-sizing: border-box; font-family: inherit; transition: border-color .15s, box-shadow .15s; }
+  .inp { width: 100%; padding: 10px 13px; border-radius: 8px; border: 1px solid var(--border); font-size: 14px; background: var(--input-bg); color: var(--text); box-sizing: border-box; font-family: inherit; transition: border-color .15s, box-shadow .15s; }
   .inp:focus { outline: none; border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79,70,229,.15); }
+  .inp option { background: var(--card); color: var(--text); }
 
   /* ── Buttons ── */
   .btn-primary { background: #4f46e5; color: #fff; border: none; border-radius: 10px; padding: 11px 24px; font-size: 14px; font-weight: 700; cursor: pointer; transition: background .2s; font-family: inherit; }
   .btn-primary:hover { background: #3730a3; }
   .btn-primary:focus-visible { outline: 3px solid #4f46e5; outline-offset: 3px; }
-  .btn-sm { padding: 7px 15px; border-radius: 6px; border: 1px solid #e2e8f0; background: transparent; color: #4a5568; font-size: 13px; cursor: pointer; font-family: inherit; font-weight: 700; transition: background .15s; }
-  .btn-sm:hover { background: #f0f2f5; }
+  .btn-sm { padding: 7px 15px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); font-size: 13px; cursor: pointer; font-family: inherit; font-weight: 700; transition: background .15s; }
+  .btn-sm:hover { background: rgba(99,102,241,0.08); }
   .btn-sm:focus-visible { outline: 3px solid #4f46e5; outline-offset: 2px; }
 
   /* ── Chart toggle ── */
-  .chart-toggle button { padding: 7px 16px; font-size: 12px; border: 1px solid #e2e8f0; background: transparent; cursor: pointer; color: #4a5568; font-family: inherit; transition: all .15s; font-weight: 700; min-height: 36px; }
+  .chart-toggle button { padding: 7px 16px; font-size: 12px; border: 1px solid var(--border); background: transparent; cursor: pointer; color: var(--text-muted); font-family: inherit; transition: all .15s; font-weight: 700; min-height: 36px; }
   .chart-toggle button:first-child { border-radius: 8px 0 0 8px; }
   .chart-toggle button:last-child  { border-radius: 0 8px 8px 0; }
   .chart-toggle button.active { background: #4f46e5; color: #fff; border-color: #4f46e5; }
@@ -875,19 +1056,19 @@ const CSS = `
   @keyframes slideIn { from { transform: translateX(40px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
   /* ── Progress ── */
-  .progress-bar  { height: 8px; border-radius: 4px; background: #e2e8f0; overflow: hidden; }
+  .progress-bar  { height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
   .progress-fill { height: 100%; border-radius: 4px; transition: width .6s ease; }
 
   /* ── Section titles ── */
-  .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: #4a5568; margin: 0 0 14px; }
+  .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin: 0 0 14px; }
 
   /* ── History ── */
-  .history-item { display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 18px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 10px; background: #fff; transition: box-shadow .15s; }
-  .history-item:hover { box-shadow: 0 2px 12px rgba(0,0,0,.06); }
-  .cat-pill { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; margin: 2px; color: #1a202c; }
+  .history-item { display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 18px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 10px; background: var(--card); transition: box-shadow .15s; }
+  .history-item:hover { box-shadow: 0 2px 12px rgba(0,0,0,.1); }
+  .cat-pill { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; margin: 2px; }
 
   /* ── Insight rows ── */
-  .insight-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #e2e8f0; }
+  .insight-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); }
   .insight-row:last-child { border-bottom: none; }
 
   /* ── Field grid ── */
