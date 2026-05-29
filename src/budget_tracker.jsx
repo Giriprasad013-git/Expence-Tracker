@@ -580,13 +580,16 @@ function exportExcel({ entries, bankBalance, carryForward, incomes, credits = []
 function PieTooltip({ active, payload }) {
   if (!active || !payload?.length) return null;
   const d = payload[0];
+  const total = payload[0]?.payload?._total;
+  const pct   = total > 0 ? Math.round((d.value / total) * 100) : 0;
   return (
-    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px", fontSize: 13, boxShadow: "0 4px 20px rgba(0,0,0,0.15)", minWidth: 170, zIndex: 9999 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-        <span style={{ width: 12, height: 12, borderRadius: "50%", background: d.payload?.fill, display: "inline-block" }} />
-        <span style={{ fontWeight: 700, color: "var(--text)" }}>{d.payload?.icon} {d.name}</span>
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px", fontSize: 13, boxShadow: "0 4px 20px rgba(0,0,0,0.15)", minWidth: 180, zIndex: 9999 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <span style={{ width: 12, height: 12, borderRadius: "50%", background: d.payload?.fill, flexShrink: 0, display: "inline-block" }} />
+        <span style={{ fontWeight: 700, color: "var(--text)" }}>{d.payload?.icon} {d.payload?.label}</span>
       </div>
-      <div style={{ color: "var(--text)", fontWeight: 700, fontFamily: "monospace", fontSize: 16 }}>{fmt(d.value)}</div>
+      <div style={{ color: "var(--text)", fontWeight: 700, fontFamily: "monospace", fontSize: 18 }}>{fmt(d.value)}</div>
+      {total > 0 && <div style={{ color: "var(--text-muted)", fontWeight: 600, fontSize: 12, marginTop: 2 }}>{pct}% of total spending</div>}
     </div>
   );
 }
@@ -596,7 +599,7 @@ function BarTooltip({ active, payload, label }) {
   return (
     <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 14px", fontSize: 13, zIndex: 9999 }}>
       <div style={{ fontWeight: 700, color: "var(--text-muted)", marginBottom: 6 }}>{label}</div>
-      {payload.map((p, i) => (
+      {payload.filter(p => p.value > 0).map((p, i) => (
         <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: p.fill || p.color, display: "inline-block" }} />
           <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>{p.name}:</span>
@@ -753,9 +756,11 @@ export default function BudgetTracker() {
     return t;
   }, [entries]);
 
-  const pieData = useMemo(() =>
-    CHART_CATS.map(c => ({ ...c, value: catTotals[c.key] })).filter(d => d.value > 0).sort((a, b) => b.value - a.value),
-    [catTotals]);
+  const pieData = useMemo(() => {
+    const items = CHART_CATS.map(c => ({ ...c, value: catTotals[c.key] })).filter(d => d.value > 0).sort((a, b) => b.value - a.value);
+    const total = items.reduce((s, d) => s + d.value, 0);
+    return items.map(d => ({ ...d, _total: total }));
+  }, [catTotals]);
 
   // ── Chart data ─────────────────────────────────────────────────────────────
   const chartData = useMemo(() => {
@@ -1202,7 +1207,7 @@ export default function BudgetTracker() {
                     <h2 className="section-title">Spending Distribution</h2>
                     <ResponsiveContainer width="100%" height={300}>
                       <PieChart>
-                        <Pie data={pieData} cx="50%" cy="45%" innerRadius={65} outerRadius={105} paddingAngle={2} dataKey="value">
+                        <Pie data={pieData} nameKey="label" cx="50%" cy="45%" innerRadius={65} outerRadius={105} paddingAngle={2} dataKey="value">
                           {pieData.map((d, i) => <Cell key={i} fill={d.fill} />)}
                         </Pie>
                         <Tooltip content={<PieTooltip />} wrapperStyle={{ zIndex: 9999 }} />
@@ -1661,7 +1666,7 @@ export default function BudgetTracker() {
                 <h2 className="section-title">Overall Spending Distribution</h2>
                 <ResponsiveContainer width="100%" height={300}>
                   <PieChart>
-                    <Pie data={pieData} cx="50%" cy="45%" innerRadius={70} outerRadius={110} paddingAngle={2} dataKey="value">
+                    <Pie data={pieData} nameKey="label" cx="50%" cy="45%" innerRadius={70} outerRadius={110} paddingAngle={2} dataKey="value">
                       {pieData.map((d, i) => <Cell key={i} fill={d.fill} />)}
                     </Pie>
                     <Tooltip content={<PieTooltip />} wrapperStyle={{ zIndex: 9999 }} />
