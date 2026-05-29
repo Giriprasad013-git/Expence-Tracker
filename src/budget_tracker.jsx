@@ -72,7 +72,7 @@ function saveState(s) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Excel export
 // ─────────────────────────────────────────────────────────────────────────────
-function exportExcel({ entries, bankBalance, carryForward, incomes }) {
+function exportExcel({ entries, bankBalance, carryForward, incomes, credits = [], ccBills = [] }) {
   // ── Palette ──────────────────────────────────────────────────────────────
   const P = {
     indigo:"4F46E5", indigoD:"3730A3", indigoL:"EEF2FF", indigoXL:"F5F3FF",
@@ -157,11 +157,17 @@ function exportExcel({ entries, bankBalance, carryForward, incomes }) {
     return parseFloat(e[key]||0);
   };
 
-  const totalExpenses = entries.reduce((s, e) => s + (e.total || eTotal(e)), 0);
-  const curMon        = getMon(today());
-  const curMonEntries = entries.filter(e => getMon(e.date) === curMon);
-  const curMonTotal   = curMonEntries.reduce((s, e) => s + (e.total || eTotal(e)), 0);
-  const netBalance    = (parseFloat(bankBalance)||0) + (parseFloat(carryForward)||0) - totalExpenses;
+  const totalExpenses    = entries.reduce((s, e) => s + (e.total || eTotal(e)), 0);
+  const curMon           = getMon(today());
+  const curMonEntries    = entries.filter(e => getMon(e.date) === curMon);
+  const curMonTotal      = curMonEntries.reduce((s, e) => s + (e.total || eTotal(e)), 0);
+  const totalCreditsExp  = credits.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+  const ccBillTotalExp   = ccBills.reduce((s, b) => s + (parseFloat(b.amount) || 0), 0);
+  const ccSpendExp       = entries.reduce((s, e) => s + (e.paymentMethod === "Credit Card" ? (e.total || eTotal(e)) : 0), 0);
+  const bankOnlyExp      = totalExpenses - ccSpendExp;
+  const ccOutstandingExp = Math.max(0, ccSpendExp - ccBillTotalExp);
+  // Bank balance is reduced only by bank-method expenses and CC bill payments
+  const netBalance       = (parseFloat(bankBalance)||0) + (parseFloat(carryForward)||0) + totalCreditsExp - bankOnlyExp - ccBillTotalExp;
   const savingsThisM  = Math.max(0, totalInc - curMonTotal);
   const savingsRate   = totalInc > 0 ? savingsThisM / totalInc : 0;
   const numMonths     = Math.max(1, new Set(entries.map(e => getMon(e.date))).size);
@@ -256,11 +262,16 @@ function exportExcel({ entries, bankBalance, carryForward, incomes }) {
     mg(ws, r, 0, r, 1); mg(ws, r, 2, r, 3); r++;
 
     const overallRows = [
-      ["Total Expenses (All Time)",        totalExpenses,  P.red,   RUPE],
-      ["Net Balance (Bank + Carry − Exp)", netBalance,     netBalance >= 0 ? P.green : P.red, RUPE],
-      ["Average Monthly Spend",            avgMonthly,     P.amber, RUPE],
-      ["Total Months Tracked",             numMonths,      P.text,  null],
-      ["Total Entries",                    entries.length, P.text,  null],
+      ["Total Expenses (All Time)",             totalExpenses,    P.red,   RUPE],
+      ["  of which CC Spend",                   ccSpendExp,       P.red,   RUPE],
+      ["  of which Bank Spend",                 bankOnlyExp,      P.text,  RUPE],
+      ["Credits Received",                      totalCreditsExp,  P.green, RUPE],
+      ["CC Bills Paid",                         ccBillTotalExp,   P.violet,RUPE],
+      ["CC Outstanding (unpaid)",               ccOutstandingExp, ccOutstandingExp > 0 ? P.red : P.green, RUPE],
+      ["Net Balance (Bank + Carry + Credits − Bank Exp − CC Bills)", netBalance, netBalance >= 0 ? P.green : P.red, RUPE],
+      ["Average Monthly Spend",                 avgMonthly,       P.amber, RUPE],
+      ["Total Months Tracked",                  numMonths,        P.text,  null],
+      ["Total Entries",                         entries.length,   P.text,  null],
     ];
     overallRows.forEach(([lbl, val, clr, fmt], i) => {
       const alt = i % 2 === 1;
@@ -947,7 +958,7 @@ export default function BudgetTracker() {
 
   // ── Export / Import ────────────────────────────────────────────────────────
   const doExportExcel = () => {
-    exportExcel({ entries, bankBalance, carryForward, incomes });
+    exportExcel({ entries, bankBalance, carryForward, incomes, credits, ccBills });
     toast("Excel report downloaded");
   };
 
@@ -988,6 +999,8 @@ export default function BudgetTracker() {
         setCarryForward(data.carryForward ?? "");
         setIncomes(data.incomes ?? [mkInc()]);
         setEntries(data.entries);
+        setCredits(data.credits ?? []);
+        setCcBills(data.ccBills ?? []);
         toast("Data imported successfully");
       } catch { toast("Invalid backup file", "error"); }
     };
