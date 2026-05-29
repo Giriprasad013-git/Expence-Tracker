@@ -613,6 +613,7 @@ export default function BudgetTracker() {
   const [editingIncId, setEditingIncId]     = useState(null);
   const [entries, setEntries]               = useState(saved?.entries ?? []);
   const [credits, setCredits]               = useState(saved?.credits ?? []);
+  const [ccBills, setCcBills]               = useState(saved?.ccBills ?? []);
   const [expForm, setExpForm]               = useState({ ...initScalar, date: today(), note: "", paymentMethod: "Bank" });
   const [formSubs, setFormSubs]             = useState([mkSub()]);
   const [formOthers, setFormOthers]         = useState([mkSub()]);
@@ -636,7 +637,7 @@ export default function BudgetTracker() {
 
   // ── Persist ────────────────────────────────────────────────────────────────
   useEffect(() => {
-    saveState({ bankBalance, carryForward, incomes, entries, credits, darkMode, lastCat: qaCat });
+    saveState({ bankBalance, carryForward, incomes, entries, credits, ccBills, darkMode, lastCat: qaCat });
   }, [bankBalance, carryForward, incomes, entries, darkMode, qaCat]);
 
   // ── Auto weekly backup ──────────────────────────────────────────────────────
@@ -711,11 +712,15 @@ export default function BudgetTracker() {
   };
 
   // ── Core derived ───────────────────────────────────────────────────────────
-  const totalIncome   = useMemo(() => incomes.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0), [incomes]);
-  const totalExpenses = useMemo(() => entries.reduce((s, e) => s + (e.total || 0), 0), [entries]);
-  const totalCredits  = useMemo(() => credits.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0), [credits]);
-  const ccSpend       = useMemo(() => entries.reduce((s, e) => s + (e.paymentMethod === "Credit Card" ? (e.total || 0) : 0), 0), [entries]);
-  const netBalance    = useMemo(() => (parseFloat(bankBalance) || 0) + (parseFloat(carryForward) || 0) + totalCredits - totalExpenses, [bankBalance, carryForward, totalExpenses, totalCredits]);
+  const totalIncome      = useMemo(() => incomes.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0), [incomes]);
+  const totalExpenses    = useMemo(() => entries.reduce((s, e) => s + (e.total || 0), 0), [entries]);
+  const totalCredits     = useMemo(() => credits.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0), [credits]);
+  const ccSpend          = useMemo(() => entries.reduce((s, e) => s + (e.paymentMethod === "Credit Card" ? (e.total || 0) : 0), 0), [entries]);
+  const bankOnlyExpenses = useMemo(() => entries.reduce((s, e) => s + (e.paymentMethod !== "Credit Card" ? (e.total || 0) : 0), 0), [entries]);
+  const ccBillTotal      = useMemo(() => ccBills.reduce((s, b) => s + (parseFloat(b.amount) || 0), 0), [ccBills]);
+  const ccOutstanding    = useMemo(() => Math.max(0, ccSpend - ccBillTotal), [ccSpend, ccBillTotal]);
+  // netBalance: bank is reduced by bank-only expenses and CC bill payments; CC purchases don't hit bank until bill is paid
+  const netBalance       = useMemo(() => (parseFloat(bankBalance) || 0) + (parseFloat(carryForward) || 0) + totalCredits - bankOnlyExpenses - ccBillTotal, [bankBalance, carryForward, bankOnlyExpenses, ccBillTotal, totalCredits]);
 
   const curMon      = getMon(today());
   const monthEntries = useMemo(() => entries.filter(e => getMon(e.date) === curMon), [entries]);
@@ -876,18 +881,29 @@ export default function BudgetTracker() {
     return list;
   }, [credits, histSearch, histMonth]);
 
+  const filteredCCBills = useMemo(() => {
+    let list = [...ccBills].sort((a, b) => b.date.localeCompare(a.date));
+    if (histMonth) list = list.filter(b => getMon(b.date) === histMonth);
+    if (histSearch.trim()) {
+      const q = histSearch.trim().toLowerCase();
+      list = list.filter(b => b.note?.toLowerCase().includes(q) || b.date.includes(q));
+    }
+    return list;
+  }, [ccBills, histSearch, histMonth]);
+
   const combinedHistory = useMemo(() => {
     const items = [
       ...filteredEntries.map(e => ({ ...e, _type: "expense" })),
       ...filteredCredits.map(c => ({ ...c, _type: "credit" })),
+      ...filteredCCBills.map(b => ({ ...b, _type: "ccbill" })),
     ];
     return items.sort((a, b) => b.date.localeCompare(a.date));
-  }, [filteredEntries, filteredCredits]);
+  }, [filteredEntries, filteredCredits, filteredCCBills]);
 
   const availableMonths = useMemo(() => {
-    const s = new Set([...entries, ...credits].map(e => getMon(e.date)));
+    const s = new Set([...entries, ...credits, ...ccBills].map(e => getMon(e.date)));
     return [...s].sort().reverse();
-  }, [entries, credits]);
+  }, [entries, credits, ccBills]);
 
   // ── Actions ────────────────────────────────────────────────────────────────
   const addEntry = useCallback(() => {
@@ -901,6 +917,7 @@ export default function BudgetTracker() {
 
   const delEntry  = (id) => { if (!confirm("Delete this entry?")) return; setEntries(p => p.filter(e => e.id !== id)); toast("Entry deleted"); };
   const delCredit = (id) => { if (!confirm("Delete this credit?")) return; setCredits(p => p.filter(c => c.id !== id)); toast("Credit deleted"); };
+  const delCCBill = (id) => { if (!confirm("Delete this CC bill payment?")) return; setCcBills(p => p.filter(b => b.id !== id)); toast("CC bill payment deleted"); };
   const addInc    = () => setIncomes(p => [...p, mkInc()]);
 
   // ── Quick Add save ─────────────────────────────────────────────────────────
@@ -911,6 +928,10 @@ export default function BudgetTracker() {
       setCredits(prev => [{ id: uid(), date: qaDate, amount: amt, note: qaNote }, ...prev]);
       setQaAmount(""); setQaNote(""); setQaOpen(false);
       toast(`💚 ${fmt(amt)} credited`);
+    } else if (qaEntryType === "ccbill") {
+      setCcBills(prev => [{ id: uid(), date: qaDate, amount: amt, note: qaNote }, ...prev]);
+      setQaAmount(""); setQaNote(""); setQaOpen(false);
+      toast(`💳 CC bill ${fmt(amt)} paid`);
     } else {
       const entry = { ...initScalar, date: qaDate, note: qaNote, subscriptions: [], others: [],
         [qaCat]: String(amt), total: amt, id: uid(), quick: true, paymentMethod: qaPayMethod };
@@ -1071,10 +1092,10 @@ export default function BudgetTracker() {
                   return (
                     <div className="metrics-grid">
                       {[
-                        { label: "Today",        val: fmt(todayTotal),                   sub: `${todayEntries.length} entries today`,  color: todayTotal > 0 ? "var(--red)" : "var(--text-muted)", highlight: true },
-                        { label: "This Month",   val: fmt(monthTotal),                   sub: `${monthEntries.length} entries`, color: "var(--red)" },
-                        { label: "Money Left",   val: fmt(netBalance),                   sub: totalCredits > 0 ? `Incl. +${fmt(totalCredits)} credits` : "After all expenses", color: balColor },
-                        { label: "💳 CC Spend",  val: fmt(ccSpend),                      sub: "Credit card total",  color: ccSpend > 0 ? "#b91c1c" : "var(--text-muted)" },
+                        { label: "Today",         val: fmt(todayTotal),    sub: `${todayEntries.length} entries today`, color: todayTotal > 0 ? "var(--red)" : "var(--text-muted)", highlight: true },
+                        { label: "This Month",    val: fmt(monthTotal),    sub: `${monthEntries.length} entries`,       color: "var(--red)" },
+                        { label: "Bank Left",     val: fmt(netBalance),    sub: "Bank balance after expenses",          color: balColor },
+                        { label: "💳 CC Due",     val: fmt(ccOutstanding), sub: ccOutstanding > 0 ? "Unpaid CC bill" : "All CC bills cleared", color: ccOutstanding > 0 ? "#b91c1c" : "#059669" },
                       ].map(m => (
                         <div key={m.label} className={`metric-card${m.highlight ? " metric-today" : ""}`}
                           style={m.highlight ? { borderColor: todayTotal > 0 ? "rgba(185,28,28,0.2)" : "var(--border)" } : {}}>
@@ -1302,10 +1323,15 @@ export default function BudgetTracker() {
             ) : (
               <>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-                  <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 700 }}>{filteredEntries.length} expense{filteredEntries.length !== 1 ? "s" : ""}{filteredCredits.length > 0 ? ` · ${filteredCredits.length} credit${filteredCredits.length !== 1 ? "s" : ""}` : ""}</span>
-                  <div style={{ display: "flex", gap: 16 }}>
-                    <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 700 }}>Out: {fmt(filteredEntries.reduce((s,e)=>s+e.total,0))}</span>
+                  <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 700 }}>
+                    {filteredEntries.length} expense{filteredEntries.length !== 1 ? "s" : ""}
+                    {filteredCredits.length > 0 ? ` · ${filteredCredits.length} credit${filteredCredits.length !== 1 ? "s" : ""}` : ""}
+                    {filteredCCBills.length > 0 ? ` · ${filteredCCBills.length} CC bill${filteredCCBills.length !== 1 ? "s" : ""}` : ""}
+                  </span>
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 700 }}>Spent: {fmt(filteredEntries.reduce((s,e)=>s+e.total,0))}</span>
                     {filteredCredits.length > 0 && <span style={{ fontSize: 13, color: "#059669", fontWeight: 700 }}>In: +{fmt(filteredCredits.reduce((s,c)=>s+(parseFloat(c.amount)||0),0))}</span>}
+                    {filteredCCBills.length > 0 && <span style={{ fontSize: 13, color: "#7c3aed", fontWeight: 700 }}>CC Paid: {fmt(filteredCCBills.reduce((s,b)=>s+(parseFloat(b.amount)||0),0))}</span>}
                   </div>
                 </div>
                 <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
@@ -1324,6 +1350,24 @@ export default function BudgetTracker() {
                           <div style={{ textAlign: "right", marginLeft: 16, flexShrink: 0 }}>
                             <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: "#059669" }}>+{fmt(item.amount)}</div>
                             <button className="btn-sm" style={{ marginTop: 8, color: "var(--red)", borderColor: "rgba(185,28,28,0.25)", minHeight: 36 }} onClick={() => delCredit(item.id)}>Delete</button>
+                          </div>
+                        </li>
+                      );
+                    }
+                    if (item._type === "ccbill") {
+                      return (
+                        <li key={item.id} className="history-item" style={{ borderLeft: "3px solid #7c3aed", background: "rgba(124,58,237,0.04)" }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
+                              <time dateTime={item.date} style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 700 }}>{ds}</time>
+                              <span style={{ fontSize: 11, background: "#ede9fe", color: "#5b21b6", borderRadius: 5, padding: "2px 8px", fontWeight: 700 }}>💳 CC BILL PAID</span>
+                            </div>
+                            {item.note && <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic" }}>{item.note}</div>}
+                            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 3 }}>Paid from bank · clears CC dues</div>
+                          </div>
+                          <div style={{ textAlign: "right", marginLeft: 16, flexShrink: 0 }}>
+                            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: "#7c3aed" }}>−{fmt(item.amount)}</div>
+                            <button className="btn-sm" style={{ marginTop: 8, color: "var(--red)", borderColor: "rgba(185,28,28,0.25)", minHeight: 36 }} onClick={() => delCCBill(item.id)}>Delete</button>
                           </div>
                         </li>
                       );
@@ -1630,13 +1674,13 @@ export default function BudgetTracker() {
             </div>
 
             {/* Entry type toggle */}
-            <div style={{ display:"flex", gap: 6, marginBottom: 16, background:"var(--input-bg)", borderRadius: 10, padding: 4 }}>
-              {[["expense","💸 Expense"],["credit","💚 Credit"]].map(([t, label]) => (
+            <div style={{ display:"flex", gap: 4, marginBottom: 16, background:"var(--input-bg)", borderRadius: 10, padding: 4 }}>
+              {[["expense","💸 Expense"],["credit","💚 Credit"],["ccbill","💳 CC Bill"]].map(([t, label]) => (
                 <button key={t} onClick={() => setQaEntryType(t)}
-                  style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: "none",
-                    background: qaEntryType === t ? (t === "expense" ? "#4f46e5" : "#059669") : "transparent",
+                  style={{ flex: 1, padding: "8px 4px", borderRadius: 8, border: "none",
+                    background: qaEntryType === t ? (t === "expense" ? "#4f46e5" : t === "credit" ? "#059669" : "#7c3aed") : "transparent",
                     color: qaEntryType === t ? "#fff" : "var(--text-muted)",
-                    fontWeight: 700, fontSize: 13, cursor: "pointer", transition: "all .15s" }}>
+                    fontWeight: 700, fontSize: 12, cursor: "pointer", transition: "all .15s" }}>
                   {label}
                 </button>
               ))}
@@ -1668,9 +1712,9 @@ export default function BudgetTracker() {
 
             {/* Amount */}
             <div style={{ marginBottom: 14 }}>
-              <label style={S.label}>{qaEntryType === "credit" ? "Amount Received (₹)" : "Amount (₹)"}</label>
-              <div className="inp-group" style={{ borderRadius: 12, borderWidth: 2, borderColor: qaEntryType === "credit" ? "#059669" : undefined }}>
-                <span style={{ padding:"0 14px", fontSize: 20, color: qaEntryType === "credit" ? "#059669" : "#4f46e5", fontWeight: 700 }}>₹</span>
+              <label style={S.label}>{qaEntryType === "credit" ? "Amount Received (₹)" : qaEntryType === "ccbill" ? "CC Bill Amount (₹)" : "Amount (₹)"}</label>
+              <div className="inp-group" style={{ borderRadius: 12, borderWidth: 2, borderColor: qaEntryType === "credit" ? "#059669" : qaEntryType === "ccbill" ? "#7c3aed" : undefined }}>
+                <span style={{ padding:"0 14px", fontSize: 20, color: qaEntryType === "credit" ? "#059669" : qaEntryType === "ccbill" ? "#7c3aed" : "#4f46e5", fontWeight: 700 }}>₹</span>
                 <input
                   ref={qaAmtRef}
                   className="inp"
@@ -1684,7 +1728,7 @@ export default function BudgetTracker() {
                   autoFocus
                   style={{ border:"none", borderRadius: 0, background:"transparent", fontSize: 28, fontWeight: 700, padding:"12px 14px 12px 0", flex: 1, color:"var(--text)", fontFamily:"monospace", outline:"none", boxShadow:"none" }}
                 />
-                {qaAmount && <span style={{ padding:"0 14px", fontSize: 14, fontWeight: 700, color: qaEntryType === "credit" ? "#059669" : "#4f46e5", fontFamily:"monospace" }}>{fmt(parseFloat(qaAmount)||0)}</span>}
+                {qaAmount && <span style={{ padding:"0 14px", fontSize: 14, fontWeight: 700, color: qaEntryType === "credit" ? "#059669" : qaEntryType === "ccbill" ? "#7c3aed" : "#4f46e5", fontFamily:"monospace" }}>{fmt(parseFloat(qaAmount)||0)}</span>}
               </div>
             </div>
 
@@ -1709,21 +1753,28 @@ export default function BudgetTracker() {
 
             {/* Note */}
             <div style={{ marginBottom: 18 }}>
-              <label style={S.label}>{qaEntryType === "credit" ? "Note (who / what)" : "Note (optional)"}</label>
+              <label style={S.label}>{qaEntryType === "credit" ? "Note (who / what)" : qaEntryType === "ccbill" ? "Note (optional)" : "Note (optional)"}</label>
               <input className="inp" type="text"
-                placeholder={qaEntryType === "credit" ? "e.g. John returned ₹500, Amazon refund…" : "e.g. lunch at office, auto to station…"}
+                placeholder={qaEntryType === "credit" ? "e.g. John returned ₹500, Amazon refund…" : qaEntryType === "ccbill" ? "e.g. HDFC CC bill, SBI card payment…" : "e.g. lunch at office, auto to station…"}
                 value={qaNote} onChange={e => setQaNote(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") saveQuickAdd(); }} />
             </div>
 
+            {/* CC Bill helper */}
+            {qaEntryType === "ccbill" && ccOutstanding > 0 && (
+              <div style={{ marginBottom: 14, padding: "10px 14px", borderRadius: 8, background: "rgba(124,58,237,0.08)", border: "1px solid rgba(124,58,237,0.2)", fontSize: 13, color: "#7c3aed", fontWeight: 600 }}>
+                💳 Current CC outstanding: {fmt(ccOutstanding)}
+              </div>
+            )}
+
             {/* Save */}
             <button className="btn-primary" onClick={saveQuickAdd}
               style={{ width:"100%", padding: 16, fontSize: 16, borderRadius: 12, minHeight: 54,
-                       background: qaEntryType === "credit" ? "#059669" : undefined,
+                       background: qaEntryType === "credit" ? "#059669" : qaEntryType === "ccbill" ? "#7c3aed" : undefined,
                        display:"flex", alignItems:"center", justifyContent:"center", gap: 10 }}>
-              <span>{qaEntryType === "credit" ? "Record Credit" : "Save Expense"}</span>
+              <span>{qaEntryType === "credit" ? "Record Credit" : qaEntryType === "ccbill" ? "Pay CC Bill" : "Save Expense"}</span>
               {qaAmount && parseFloat(qaAmount) > 0 && (
-                <span style={{ background:"rgba(255,255,255,0.25)", borderRadius: 8, padding:"2px 10px", fontFamily:"monospace" }}>{(qaEntryType === "credit" ? "+" : "") + fmt(parseFloat(qaAmount))}</span>
+                <span style={{ background:"rgba(255,255,255,0.25)", borderRadius: 8, padding:"2px 10px", fontFamily:"monospace" }}>{(qaEntryType === "credit" ? "+" : "−") + fmt(parseFloat(qaAmount))}</span>
               )}
             </button>
           </div>
