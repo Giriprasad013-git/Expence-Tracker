@@ -649,7 +649,7 @@ export default function BudgetTracker() {
   // ── Persist ────────────────────────────────────────────────────────────────
   useEffect(() => {
     saveState({ bankBalance, carryForward, incomes, entries, credits, ccBills, darkMode, lastCat: qaCat });
-  }, [bankBalance, carryForward, incomes, entries, darkMode, qaCat]);
+  }, [bankBalance, carryForward, incomes, entries, credits, ccBills, darkMode, qaCat]);
 
   // ── Auto weekly backup ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -978,7 +978,7 @@ export default function BudgetTracker() {
   };
 
   const exportJSON = () => {
-    const data = { bankBalance, carryForward, incomes, entries, exportedAt: new Date().toISOString() };
+    const data = { bankBalance, carryForward, incomes, entries, credits, ccBills, exportedAt: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url  = URL.createObjectURL(blob);
     Object.assign(document.createElement("a"), { href: url, download: `budget-backup-${today()}.json` }).click();
