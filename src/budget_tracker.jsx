@@ -10,30 +10,30 @@ import {
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 const FIXED_CATEGORIES = [
-  { key: "rent",       label: "Rent / Housing", icon: "🏠", color: "#4f46e5", fill: "#6366f1" },
-  { key: "family",     label: "Family",          icon: "👨‍👩‍👧", color: "#be185d", fill: "#ec4899" },
-  { key: "loanEmi",   label: "Loan EMI",         icon: "🏦", color: "#b45309", fill: "#f59e0b" },
-  { key: "creditCard", label: "Credit Card",     icon: "💳", color: "#b91c1c", fill: "#ef4444" },
-  { key: "sip",        label: "Savings / SIP",   icon: "📈", color: "#047857", fill: "#10b981" },
+  { key: "rent",       label: "Rent",        icon: "🏠", color: "#4f46e5", fill: "#6366f1", desc: "Monthly rent, mortgage or housing costs" },
+  { key: "family",     label: "Family",      icon: "👨‍👩‍👧", color: "#be185d", fill: "#ec4899", desc: "Money sent or spent for family members" },
+  { key: "loanEmi",   label: "Loan EMI",    icon: "🏦", color: "#b45309", fill: "#f59e0b", desc: "Fixed monthly EMI — home, car or personal loan" },
+  { key: "creditCard", label: "CC Bill",     icon: "💳", color: "#b91c1c", fill: "#ef4444", desc: "Fixed credit card bill as a monthly expense entry" },
+  { key: "sip",        label: "SIP / MF",   icon: "📈", color: "#047857", fill: "#10b981", desc: "Fixed monthly SIP or mutual fund investment" },
 ];
 const VARIABLE_CATEGORIES = [
-  { key: "food",      label: "Food & Dining", icon: "🍽️", color: "#065f46", fill: "#10b981" },
-  { key: "groceries", label: "Groceries",     icon: "🛒", color: "#0f766e", fill: "#14b8a6" },
-  { key: "transport", label: "Transport",     icon: "🚗", color: "#1d4ed8", fill: "#3b82f6" },
+  { key: "food",      label: "Food",      icon: "🍽️", color: "#065f46", fill: "#10b981", desc: "Restaurants, food delivery, canteen or meals" },
+  { key: "groceries", label: "Groceries", icon: "🛒", color: "#0f766e", fill: "#14b8a6", desc: "Supermarket, kirana store, vegetables, milk" },
+  { key: "transport", label: "Transport", icon: "🚗", color: "#1d4ed8", fill: "#3b82f6", desc: "Auto, cab, Ola/Uber, petrol, metro, bus" },
 ];
 const WELLBEING_CATEGORIES = [
-  { key: "savings",       label: "Savings / Investment", icon: "💰", color: "#0369a1", fill: "#0ea5e9" },
-  { key: "insurance",     label: "Insurance",            icon: "🛡️", color: "#0e7490", fill: "#0891b2" },
-  { key: "medical",       label: "Medical / Health",     icon: "🏥", color: "#c2410c", fill: "#f97316" },
-  { key: "education",     label: "Education",            icon: "📚", color: "#7e22ce", fill: "#a855f7" },
-  { key: "entertainment", label: "Entertainment",        icon: "🎬", color: "#9f1239", fill: "#fb7185" },
-  { key: "utilities",     label: "Utilities",            icon: "⚡", color: "#92400e", fill: "#fbbf24" },
+  { key: "savings",       label: "Savings",       icon: "💰", color: "#0369a1", fill: "#0ea5e9", desc: "Ad-hoc savings deposit or investment" },
+  { key: "insurance",     label: "Insurance",     icon: "🛡️", color: "#0e7490", fill: "#0891b2", desc: "Health, life or vehicle insurance premium" },
+  { key: "medical",       label: "Medical",       icon: "🏥", color: "#c2410c", fill: "#f97316", desc: "Doctor visits, medicines, hospital bills" },
+  { key: "education",     label: "Education",     icon: "📚", color: "#7e22ce", fill: "#a855f7", desc: "School fees, online courses, books, tuition" },
+  { key: "entertainment", label: "Fun",           icon: "🎬", color: "#9f1239", fill: "#fb7185", desc: "Movies, events, dining out, hobbies, travel" },
+  { key: "utilities",     label: "Utilities",     icon: "⚡", color: "#92400e", fill: "#fbbf24", desc: "Electricity, water, gas, internet, phone bill" },
 ];
 const ALL_SCALAR = [...FIXED_CATEGORIES, ...VARIABLE_CATEGORIES, ...WELLBEING_CATEGORIES];
 const CHART_CATS = [
   ...ALL_SCALAR,
-  { key: "subscriptions", label: "Subscriptions", icon: "📱", color: "#6d28d9", fill: "#8b5cf6" },
-  { key: "other",         label: "Other",          icon: "📦", color: "#475569", fill: "#94a3b8" },
+  { key: "subscriptions", label: "Subscriptions", icon: "📱", color: "#6d28d9", fill: "#8b5cf6", desc: "Netflix, Spotify, app subscriptions etc." },
+  { key: "other",         label: "Other",          icon: "📦", color: "#475569", fill: "#94a3b8", desc: "Any expense that doesn't fit other categories" },
 ];
 const INCOME_TYPES = ["Salary", "Freelance", "Business", "Rental", "Other"];
 const STORAGE_KEY  = "budget_tracker_v2";
@@ -1697,16 +1697,22 @@ export default function BudgetTracker() {
               <div style={{ marginBottom: 14 }}>
                 <label style={S.label}>Category</label>
                 <div className="qa-cat-grid">
-                  {CHART_CATS.filter(c => c.key !== "subscriptions" && c.key !== "other").map(c => (
+                  {CHART_CATS.filter(c => c.key !== "subscriptions" && c.key !== "other" && c.key !== "creditCard").map(c => (
                     <button key={c.key} className={`qa-cat-btn${qaCat === c.key ? " selected" : ""}`}
                       onClick={() => { setQaCat(c.key); qaAmtRef.current?.focus(); }}
-                      title={c.label}
+                      title={c.desc || c.label}
                       style={{ borderColor: qaCat === c.key ? c.fill : "var(--border)", background: qaCat === c.key ? c.fill + "18" : "var(--input-bg)" }}>
                       <span style={{ fontSize: 22 }}>{c.icon}</span>
-                      <span style={{ fontSize: 10, fontWeight: 600, color: qaCat === c.key ? c.color : "var(--text-muted)", lineHeight: 1.2, marginTop: 3 }}>{c.label.split(" ")[0]}</span>
+                      <span style={{ fontSize: 10, fontWeight: 600, color: qaCat === c.key ? c.color : "var(--text-muted)", lineHeight: 1.2, marginTop: 3 }}>{c.label}</span>
                     </button>
                   ))}
                 </div>
+                {/* Description of selected category */}
+                {(() => { const c = CHART_CATS.find(c => c.key === qaCat); return c?.desc ? (
+                  <div style={{ marginTop: 8, padding: "7px 12px", borderRadius: 7, background: c.fill + "15", border: `1px solid ${c.fill}40`, fontSize: 12, color: c.color, fontWeight: 600 }}>
+                    {c.icon} {c.desc}
+                  </div>
+                ) : null; })()}
               </div>
             )}
 
