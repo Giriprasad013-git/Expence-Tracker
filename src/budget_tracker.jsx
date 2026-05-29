@@ -723,8 +723,10 @@ export default function BudgetTracker() {
   const netBalance       = useMemo(() => (parseFloat(bankBalance) || 0) + (parseFloat(carryForward) || 0) + totalCredits - bankOnlyExpenses - ccBillTotal, [bankBalance, carryForward, bankOnlyExpenses, ccBillTotal, totalCredits]);
 
   const curMon      = getMon(today());
-  const monthEntries = useMemo(() => entries.filter(e => getMon(e.date) === curMon), [entries]);
-  const monthTotal   = useMemo(() => monthEntries.reduce((s, e) => s + e.total, 0), [monthEntries]);
+  const monthEntries    = useMemo(() => entries.filter(e => getMon(e.date) === curMon), [entries]);
+  const monthTotal      = useMemo(() => monthEntries.reduce((s, e) => s + e.total, 0), [monthEntries]);
+  const monthCCSpend    = useMemo(() => monthEntries.reduce((s, e) => s + (e.paymentMethod === "Credit Card" ? e.total : 0), 0), [monthEntries]);
+  const monthCredits    = useMemo(() => credits.filter(c => getMon(c.date) === curMon).reduce((s, c) => s + (parseFloat(c.amount) || 0), 0), [credits, curMon]);
   const weekEntries  = useMemo(() => { const w = getWeek(today()); return entries.filter(e => getWeek(e.date) >= w); }, [entries]);
   const weekTotal    = useMemo(() => weekEntries.reduce((s, e) => s + e.total, 0), [weekEntries]);
 
@@ -1358,16 +1360,18 @@ export default function BudgetTracker() {
                       return (
                         <li key={item.id} className="history-item" style={{ borderLeft: "3px solid #7c3aed", background: "rgba(124,58,237,0.04)" }}>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
                               <time dateTime={item.date} style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 700 }}>{ds}</time>
                               <span style={{ fontSize: 11, background: "#ede9fe", color: "#5b21b6", borderRadius: 5, padding: "2px 8px", fontWeight: 700 }}>💳 CC BILL PAID</span>
+                              <span style={{ fontSize: 11, background: "rgba(5,150,105,0.1)", color: "#065f46", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>not an expense</span>
                             </div>
                             {item.note && <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic" }}>{item.note}</div>}
-                            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 3 }}>Paid from bank · clears CC dues</div>
+                            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 3 }}>Bank → CC transfer only. Your actual spends (food, transport etc.) are already counted in analytics when you made them — this does not add to any expense total.</div>
                           </div>
                           <div style={{ textAlign: "right", marginLeft: 16, flexShrink: 0 }}>
                             <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: "#7c3aed" }}>−{fmt(item.amount)}</div>
-                            <button className="btn-sm" style={{ marginTop: 8, color: "var(--red)", borderColor: "rgba(185,28,28,0.25)", minHeight: 36 }} onClick={() => delCCBill(item.id)}>Delete</button>
+                            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>from bank</div>
+                            <button className="btn-sm" style={{ marginTop: 6, color: "var(--red)", borderColor: "rgba(185,28,28,0.25)", minHeight: 36 }} onClick={() => delCCBill(item.id)}>Delete</button>
                           </div>
                         </li>
                       );
@@ -1430,18 +1434,32 @@ export default function BudgetTracker() {
               </div>
             </div>
 
+            {/* CC accounting info — only when CC spend exists */}
+            {ccSpend > 0 && (
+              <div style={{ padding: "12px 16px", borderRadius: 10, background: "rgba(124,58,237,0.07)", border: "1px solid rgba(124,58,237,0.2)", display: "flex", gap: 12, alignItems: "flex-start" }}>
+                <span style={{ fontSize: 20, flexShrink: 0 }}>💳</span>
+                <div style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.6 }}>
+                  <strong>How CC is tracked:</strong> CC expenses (e.g. restaurant on card) are counted in the category they belong to — food, transport etc. — <em>when you spend</em>.
+                  Paying the CC bill is a bank-to-card transfer and adds nothing to analytics.
+                  <span style={{ display: "block", marginTop: 4, color: "var(--text-muted)", fontWeight: 600 }}>
+                    CC outstanding: {fmt(ccOutstanding)} · Total CC spent: {fmt(ccSpend)} · CC bills paid: {fmt(ccBillTotal)}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* KPI Row */}
             <div className="analytics-stats">
               {[
                 { label: "Avg Monthly Spend", val: numMonths > 0 ? fmt(avgMonthly) : "—", color: "#4f46e5", sub: `over ${numMonths} month${numMonths !== 1 ? "s" : ""}` },
                 { label: "This Month",        val: fmt(monthTotal), color: momDelta !== null && momDelta > 0 ? "var(--red)" : "var(--green)",
-                  sub: momDelta !== null ? `${momDelta >= 0 ? "▲" : "▼"} ${Math.abs(momDelta).toFixed(1)}% vs last month` : "first month" },
+                  sub: monthCCSpend > 0 ? `💳 ${fmt(monthCCSpend)} CC · 🏦 ${fmt(monthTotal - monthCCSpend)} bank` : (momDelta !== null ? `${momDelta >= 0 ? "▲" : "▼"} ${Math.abs(momDelta).toFixed(1)}% vs last month` : "first month") },
                 { label: "Avg Daily Spend",   val: fmt(avgDailyMonth), color: "#b45309", sub: `${daysElapsed} days elapsed` },
                 { label: "Projected Month-End", val: fmt(projectedEnd), color: projectedEnd > totalIncome && totalIncome > 0 ? "var(--red)" : "var(--green)",
                   sub: totalIncome > 0 ? (projectedEnd > totalIncome ? "⚠️ over income" : "✅ within income") : "" },
-                { label: "Savings Rate",      val: `${savingsRate}%`, color: savingsRate >= 20 ? "var(--green)" : "#b45309", sub: "this month" },
+                { label: "Savings Rate",      val: `${savingsRate}%`, color: savingsRate >= 20 ? "var(--green)" : "#b45309", sub: monthCredits > 0 ? `+${fmt(monthCredits)} credits this month` : "this month" },
                 { label: "Peak Day Spend",    val: fmt(peakDay), color: "var(--red)", sub: "single day high" },
-                { label: "Total Expenses",    val: fmt(totalExpenses), color: "var(--text)", sub: `${entries.length} entries` },
+                { label: "Total Expenses",    val: fmt(totalExpenses), color: "var(--text)", sub: ccSpend > 0 ? `💳 ${fmt(ccSpend)} CC · 🏦 ${fmt(totalExpenses - ccSpend)} bank` : `${entries.length} entries` },
                 { label: "Months Tracked",    val: String(numMonths), color: "#4f46e5", sub: "calendar months" },
               ].map(m => (
                 <div key={m.label} className="metric-card">
@@ -1529,7 +1547,7 @@ export default function BudgetTracker() {
                       {[
                         { label: "Savings Rate",             val: savingsRate, t: 20, unit: "%", tip: "Target ≥ 20%", inv: false },
                         { label: "Housing % of income",      val: Math.round((catTotals.rent / totalIncome) * 100), t: 30, unit: "%", tip: "Target ≤ 30%", inv: true },
-                        { label: "Debt (EMI + Credit Card)", val: Math.round(((catTotals.loanEmi + catTotals.creditCard) / totalIncome) * 100), t: 20, unit: "%", tip: "Target ≤ 20%", inv: true },
+                        { label: "Debt (EMI + CC spend)", val: Math.round(((catTotals.loanEmi + ccSpend) / totalIncome) * 100), t: 20, unit: "%", tip: "Target ≤ 20%", inv: true },
                         { label: "Food % of income",         val: Math.round((catTotals.food / totalIncome) * 100), t: 15, unit: "%", tip: "Target ≤ 15%", inv: true },
                       ].map(item => {
                         const pass = item.inv ? item.val <= item.t : item.val >= item.t;
